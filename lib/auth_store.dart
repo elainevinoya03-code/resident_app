@@ -1,194 +1,199 @@
 import 'dart:convert';
-import 'dart:math';
 
-import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Minimal resident profile persisted on-device after registration.
-/// Only the fields the barangay system requires are stored.
+import 'api_service.dart';
+
+/// Resident profile stored in the existing Supabase `users` table and
+/// cached locally in SharedPreferences for instant access.
 class ResidentProfile {
-  final String phoneNumber;
+  final String email;
   final String firstName;
+  final String middleName;
   final String lastName;
+  final String dateOfBirth;
+  final String sex;
+  final String civilStatus;
   final String address;
+  final String phoneNumber;
   final String createdAtIso;
 
   const ResidentProfile({
-    required this.phoneNumber,
+    required this.email,
     required this.firstName,
+    this.middleName = '',
     required this.lastName,
-    required this.address,
-    required this.createdAtIso,
+    this.dateOfBirth = '',
+    this.sex = '',
+    this.civilStatus = '',
+    this.address = '',
+    this.phoneNumber = '',
+    this.createdAtIso = '',
   });
 
   String get displayName => '$firstName $lastName'.trim();
 
   Map<String, dynamic> toJson() => {
-        'phoneNumber': phoneNumber,
-        'firstName': firstName,
-        'lastName': lastName,
-        'address': address,
-        'createdAtIso': createdAtIso,
-      };
+    'email': email,
+    'firstName': firstName,
+    'middleName': middleName,
+    'lastName': lastName,
+    'dateOfBirth': dateOfBirth,
+    'sex': sex,
+    'civilStatus': civilStatus,
+    'address': address,
+    'phoneNumber': phoneNumber,
+    'createdAtIso': createdAtIso,
+  };
 
   factory ResidentProfile.fromJson(Map<String, dynamic> json) {
     return ResidentProfile(
-      phoneNumber: '${json['phoneNumber'] ?? ''}',
+      email: '${json['email'] ?? ''}',
       firstName: '${json['firstName'] ?? ''}',
+      middleName: '${json['middleName'] ?? ''}',
       lastName: '${json['lastName'] ?? ''}',
+      dateOfBirth: '${json['dateOfBirth'] ?? ''}',
+      sex: '${json['sex'] ?? ''}',
+      civilStatus: '${json['civilStatus'] ?? ''}',
       address: '${json['address'] ?? ''}',
+      phoneNumber: '${json['phoneNumber'] ?? ''}',
       createdAtIso: '${json['createdAtIso'] ?? ''}',
     );
   }
 }
 
-/// Outcome of a PIN verification attempt.
-enum PinStatus {
-  /// Correct PIN — attempt counters are reset.
-  ok,
-
-  /// Wrong PIN — [PinVerification.attemptsLeft] counts down to lockout.
-  wrong,
-
-  /// Temporarily locked — try again after [PinVerification.lockoutSeconds].
-  locked,
-}
-
-class PinVerification {
-  final PinStatus status;
-  final int attemptsLeft;
-  final int lockoutSeconds;
-
-  const PinVerification._(
-    this.status, {
-    this.attemptsLeft = 0,
-    this.lockoutSeconds = 0,
-  });
-
-  const PinVerification.ok() : this._(PinStatus.ok);
-
-  const PinVerification.wrong(int attemptsLeft)
-      : this._(PinStatus.wrong, attemptsLeft: attemptsLeft);
-
-  const PinVerification.locked(int lockoutSeconds)
-      : this._(PinStatus.locked, lockoutSeconds: lockoutSeconds);
-}
-
-/// On-device credential store backing the resident authentication flow.
+/// Authentication and profile store backed by Supabase.
 ///
-/// Design notes:
-/// - The PIN is NEVER stored as plain text — only a salted SHA-256 hash.
-/// - "Returning resident = PIN first": [isReturningUser] is true when an
-///   account exists, a PIN is set, and this device is trusted.
-/// - "Device verification": an existing account on an untrusted device must
-///   pass OTP + the Register-This-Device step before PIN login is allowed.
-/// - Failed PIN attempts trigger an escalating temporary lockout.
+/// Login/registration run against the existing `users` table through
+/// [ApiService] (no Supabase Auth sessions). The profile is cached in
+/// [SharedPreferences] so the UI can read it synchronously on every
+/// launch while a fresh copy is fetched from the database in the
+/// background.
 class AuthStore {
-  static const String _kAccount = 'cpss.account.v1';
+  static const String _kProfile = 'cpss.profile.v2';
   static const String _kDeviceId = 'cpss.device_id.v1';
   static const String _kTrusted = 'cpss.device_trusted.v1';
-  static const String _kTrustedPhone = 'cpss.device_trusted_phone.v1';
-  static const String _kPinHash = 'cpss.pin_hash.v1';
-  static const String _kPinSalt = 'cpss.pin_salt.v1';
-  static const String _kFailedAttempts = 'cpss.pin_failed_attempts.v1';
-  static const String _kLockoutUntilMs = 'cpss.pin_lockout_until_ms.v1';
-  static const String _kLockoutCount = 'cpss.pin_lockout_count.v1';
+  static const String _kTrustedEmail = 'cpss.device_trusted_email.v1';
 
-  /// Wrong PINs before a temporary lockout kicks in.
-  static const int maxAttempts = 5;
+  // ── Password policy (client-side validation only) ────────────
 
-  /// First lockout duration; doubles every subsequent cycle (cap 15 min).
-  static const int baseLockoutSeconds = 30;
-  static const int maxLockoutSeconds = 900;
+  static const int minPasswordLength = 8;
+  static final RegExp _hasUppercase = RegExp(r'[A-Z]');
+  static final RegExp _hasLowercase = RegExp(r'[a-z]');
+  static final RegExp _hasNumber = RegExp(r'[0-9]');
+  static final RegExp _hasSpecial = RegExp(r'[^A-Za-z0-9]');
+
+  static List<String> passwordPolicyErrors(String password) {
+    final errors = <String>[];
+    if (password.length < minPasswordLength) {
+      errors.add('be at least $minPasswordLength characters');
+    }
+    if (!_hasUppercase.hasMatch(password)) {
+      errors.add('contain at least one uppercase letter');
+    }
+    if (!_hasLowercase.hasMatch(password)) {
+      errors.add('contain at least one lowercase letter');
+    }
+    if (!_hasNumber.hasMatch(password)) {
+      errors.add('contain at least one number');
+    }
+    if (!_hasSpecial.hasMatch(password)) {
+      errors.add('contain at least one special character (e.g. @, #, \$, !)');
+    }
+    return errors;
+  }
+
+  static bool isValidPassword(String password) =>
+      passwordPolicyErrors(password).isEmpty;
+
+  // ── Email helpers ────────────────────────────────────────────
+
+  static String normalizeEmail(String email) => email.trim().toLowerCase();
+
+  static String maskEmail(String email) {
+    final e = email.trim();
+    final at = e.indexOf('@');
+    if (at <= 1) return e;
+    final local = e.substring(0, at);
+    final first = local[0];
+    final masked = '$first${'*' * (local.length - 1)}';
+    return '$masked${e.substring(at)}';
+  }
+
+  // ── Instance ─────────────────────────────────────────────────
 
   final SharedPreferences _prefs;
+  ResidentProfile? _profile;
 
   AuthStore._(this._prefs);
 
+  /// Load the cached profile and kick off a background refresh from
+  /// Supabase. Returns immediately so the UI is never blocked.
   static Future<AuthStore> load() async {
     final prefs = await SharedPreferences.getInstance();
-    return AuthStore._(prefs);
+    final store = AuthStore._(prefs);
+
+    // Restore the cached profile so the first frame has data.
+    store._profile = store._readCache();
+
+    // Fire-and-forget: fetch the fresh profile from Supabase and
+    // update the cache. Callers that need the fresh data right away
+    // should await [refreshProfile] instead.
+    store._refreshProfileInBackground();
+
+    return store;
   }
 
-  // ------------------------------------------------------------------
-  // Demo mode
-  // ------------------------------------------------------------------
-  // The whole auth backend is simulated for the demo (no SMS, no server).
-  // [demoMode] loosens the Log In path so any well-formed number and the
-  // [demoPin] are accepted, letting reviewers reach Home without a real
-  // registered account. Set this to false and wire the real backend to
-  // restore strict behavior.
+  // ── Account ──────────────────────────────────────────────────
 
-  /// When true, Log In accepts any valid mobile number and [demoPin].
-  static const bool demoMode = true;
+  /// The cached resident profile. Returns `null` when no profile has
+  /// been stored yet (first launch, or after clearing app data).
+  ResidentProfile? get account => _profile;
 
-  /// The PIN accepted on the Log In screen when demo mode is on and no real
-  /// account/PIN is stored on the device yet.
-  static const String demoPin = '123456';
+  bool get hasAccount => _profile != null;
 
-  /// Demo designation used for the masked number / greeting when no actual
-  /// account is stored (so demo Log In doesn't show a blank name).
-  static const String demoName = 'Demo Resident';
+  /// True when the currently cached profile matches [email].
+  bool accountMatches(String email) {
+    final acc = _profile;
+    if (acc == null) return false;
+    return normalizeEmail(acc.email) == normalizeEmail(email);
+  }
 
-  /// In demo mode the [demoPin] always unlocks Log In, so the demo hint is
-  /// always relevant on the PIN screen.
-  bool get isDemoAccount => demoMode;
+  String get maskedEmail {
+    final acc = _profile;
+    if (acc == null || acc.email.isEmpty) return 'name@email.com';
+    return maskEmail(acc.email);
+  }
 
-  // ------------------------------------------------------------------
-  // Account
-  // ------------------------------------------------------------------
+  /// Persist a profile in the local cache. The account itself is already
+  /// stored in the `users` table server-side during registration/login.
+  Future<void> saveRegistration(ResidentProfile profile) async {
+    _profile = profile;
+    await _writeCache(profile);
+  }
 
-  ResidentProfile? get account {
-    final raw = _prefs.getString(_kAccount);
-    if (raw == null || raw.isEmpty) return null;
+  /// Fetch the latest profile from Supabase by the cached email and
+  /// update the cache.
+  Future<void> refreshProfile() async {
     try {
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final profile = ResidentProfile.fromJson(map);
-      if (profile.phoneNumber.isEmpty) return null;
-      return profile;
+      final email = _profile?.email;
+      if (email == null || email.isEmpty) return;
+      final profile = await ApiService.fetchProfileByEmail(email);
+      if (profile != null) {
+        _profile = profile;
+        await _writeCache(profile);
+      }
     } catch (_) {
-      return null;
+      // Keep the stale cache; don't crash.
     }
   }
 
-  bool get hasAccount => account != null;
+  // ── Trusted device (local-only) ──────────────────────────────
 
-  /// Compares by last 10 digits so "+63 9XX…", "09XX…" and "9XX…" all match.
-  static String normalizePhone(String phone) {
-    final digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.length > 10) return digits.substring(digits.length - 10);
-    return digits;
-  }
-
-  bool accountMatches(String phone) {
-    final acc = account;
-    if (acc == null) return false;
-    return normalizePhone(acc.phoneNumber) == normalizePhone(phone);
-  }
-
-  String get maskedPhone {
-    final acc = account;
-    if (acc == null) return '+63 XXX XXXX';
-    final digits = normalizePhone(acc.phoneNumber);
-    if (digits.length < 4) return acc.phoneNumber;
-    return '+63 XXX ${digits.substring(digits.length - 4)}';
-  }
-
-  Future<void> saveRegistration(ResidentProfile profile) async {
-    await _prefs.setString(_kAccount, jsonEncode(profile.toJson()));
-  }
-
-  // ------------------------------------------------------------------
-  // Trusted device
-  // ------------------------------------------------------------------
-
-  /// Stable per-install device identifier (created lazily).
   Future<String> deviceId() async {
     var id = _prefs.getString(_kDeviceId);
     if (id == null || id.isEmpty) {
-      final r = Random.secure();
-      final bytes = List<int>.generate(12, (_) => r.nextInt(256));
-      id = base64Url.encode(bytes).replaceAll('=', '');
+      id = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
       await _prefs.setString(_kDeviceId, id);
     }
     return id;
@@ -196,124 +201,65 @@ class AuthStore {
 
   bool get isDeviceTrusted {
     if (!(_prefs.getBool(_kTrusted) ?? false)) return false;
-    final acc = account;
+    final acc = _profile;
     if (acc == null) return false;
-    return normalizePhone(_prefs.getString(_kTrustedPhone) ?? '') ==
-        normalizePhone(acc.phoneNumber);
+    return normalizeEmail(_prefs.getString(_kTrustedEmail) ?? '') ==
+        normalizeEmail(acc.email);
   }
 
-  /// Marks this device as trusted for the currently stored account.
   Future<void> trustDevice() async {
-    final acc = account;
+    final acc = _profile;
     if (acc == null) return;
     await deviceId();
     await _prefs.setBool(_kTrusted, true);
-    await _prefs.setString(_kTrustedPhone, acc.phoneNumber);
+    await _prefs.setString(_kTrustedEmail, acc.email);
   }
 
-  /// Unregisters this device (keeps the account record so the
-  /// Device-Verification flow can run on next launch).
   Future<void> untrustDevice() async {
     await _prefs.setBool(_kTrusted, false);
-    await _prefs.remove(_kTrustedPhone);
+    await _prefs.remove(_kTrustedEmail);
   }
 
-  /// Full reset — as if app data was cleared. Next launch starts at the
-  /// mobile-number screen with no remembered account.
+  bool get isReturningUser => hasAccount && isDeviceTrusted;
+
+  /// Full reset — clears cached profile and device trust.
   Future<void> eraseAll() async {
-    await _prefs.remove(_kAccount);
+    _profile = null;
+    await _prefs.remove(_kProfile);
     await _prefs.remove(_kTrusted);
-    await _prefs.remove(_kTrustedPhone);
-    await _prefs.remove(_kPinHash);
-    await _prefs.remove(_kPinSalt);
-    await _prefs.remove(_kFailedAttempts);
-    await _prefs.remove(_kLockoutUntilMs);
-    await _prefs.remove(_kLockoutCount);
+    await _prefs.remove(_kTrustedEmail);
   }
 
-  // ------------------------------------------------------------------
-  // PIN (salted SHA-256 hash — never plain text)
-  // ------------------------------------------------------------------
+  // ── Private helpers ──────────────────────────────────────────
 
-  bool get hasPin => (_prefs.getString(_kPinHash) ?? '').isNotEmpty;
-
-  /// True when app launch should go straight to PIN login.
-  bool get isReturningUser => hasAccount && hasPin && isDeviceTrusted;
-
-  static String hashPin(String pin, String salt) {
-    return sha256.convert(utf8.encode('$salt::$pin')).toString();
-  }
-
-  static String newSalt() {
-    final r = Random.secure();
-    final bytes = List<int>.generate(16, (_) => r.nextInt(256));
-    return base64Url.encode(bytes);
-  }
-
-  /// PIN policy shared by the create/confirm/enter PIN screens: 4–6 digits.
-  static bool isValidPin(String pin) {
-    if (pin.length < 4 || pin.length > 6) return false;
-    return RegExp(r'^[0-9]+$').hasMatch(pin);
-  }
-
-  /// Stores a new PIN (hash only) and clears any lockout state.
-  Future<void> setPin(String pin) async {
-    final salt = newSalt();
-    await _prefs.setString(_kPinSalt, salt);
-    await _prefs.setString(_kPinHash, hashPin(pin, salt));
-    await _prefs.setInt(_kFailedAttempts, 0);
-    await _prefs.setInt(_kLockoutUntilMs, 0);
-    await _prefs.setInt(_kLockoutCount, 0);
-  }
-
-  int get failedAttempts => _prefs.getInt(_kFailedAttempts) ?? 0;
-
-  int get lockoutSecondsRemaining {
-    final until = _prefs.getInt(_kLockoutUntilMs) ?? 0;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (until <= now) return 0;
-    return ((until - now) / 1000).ceil();
-  }
-
-  Future<PinVerification> verifyPin(String pin) async {
-    // Demo mode: the demo PIN ALWAYS unlocks Log In and clears any lockout
-    // left over from earlier testing or from entering a real PIN wrong, so
-    // reviewers can never get stuck on the demo.
-    if (demoMode && pin == demoPin) {
-      await _prefs.setInt(_kFailedAttempts, 0);
-      await _prefs.setInt(_kLockoutUntilMs, 0);
-      await _prefs.setInt(_kLockoutCount, 0);
-      return const PinVerification.ok();
+  void _refreshProfileInBackground() async {
+    try {
+      final email = _profile?.email;
+      if (email == null || email.isEmpty) return;
+      final profile = await ApiService.fetchProfileByEmail(email);
+      if (profile != null) {
+        _profile = profile;
+        await _writeCache(profile);
+      }
+    } catch (_) {
+      // Best-effort; the stale cache (or null) is fine.
     }
+  }
 
-    final remaining = lockoutSecondsRemaining;
-    if (remaining > 0) {
-      return PinVerification.locked(remaining);
+  ResidentProfile? _readCache() {
+    final raw = _prefs.getString(_kProfile);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final profile = ResidentProfile.fromJson(map);
+      if (profile.email.isEmpty) return null;
+      return profile;
+    } catch (_) {
+      return null;
     }
+  }
 
-    final salt = _prefs.getString(_kPinSalt) ?? '';
-    final stored = _prefs.getString(_kPinHash) ?? '';
-    if (stored.isNotEmpty && stored == hashPin(pin, salt)) {
-      await _prefs.setInt(_kFailedAttempts, 0);
-      await _prefs.setInt(_kLockoutUntilMs, 0);
-      await _prefs.setInt(_kLockoutCount, 0);
-      return const PinVerification.ok();
-    }
-
-    final attempts = failedAttempts + 1;
-    if (attempts >= maxAttempts) {
-      final count = (_prefs.getInt(_kLockoutCount) ?? 0) + 1;
-      var seconds = baseLockoutSeconds * (1 << (count - 1));
-      if (seconds > maxLockoutSeconds) seconds = maxLockoutSeconds;
-      final until =
-          DateTime.now().millisecondsSinceEpoch + seconds * 1000;
-      await _prefs.setInt(_kFailedAttempts, 0);
-      await _prefs.setInt(_kLockoutCount, count);
-      await _prefs.setInt(_kLockoutUntilMs, until);
-      return PinVerification.locked(seconds);
-    }
-
-    await _prefs.setInt(_kFailedAttempts, attempts);
-    return PinVerification.wrong(maxAttempts - attempts);
+  Future<void> _writeCache(ResidentProfile profile) async {
+    await _prefs.setString(_kProfile, jsonEncode(profile.toJson()));
   }
 }

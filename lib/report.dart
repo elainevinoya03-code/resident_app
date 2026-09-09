@@ -1620,14 +1620,14 @@ class _SuccessScreen extends StatelessWidget {
                 child: Row(
                   children: const [
                     Icon(
-                      Icons.sms_outlined,
+                      Icons.mark_email_read_outlined,
                       size: 15,
                       color: AppColors.textGray,
                     ),
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'A confirmation SMS was sent to your registered number.',
+                        'A confirmation email was sent to your registered email address.',
                         style: TextStyle(
                           fontSize: 12.5,
                           color: AppColors.textGray,

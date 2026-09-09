@@ -8,6 +8,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'auth_store.dart';
+import 'api_service.dart';
 
 class AppColors {
   static const Color primaryDark = Color(0xFF14532D);
@@ -55,7 +56,7 @@ class AppColors {
   static const Color success = Color(0xFF2E8B57);
   static const Color verified = Color(0xFF2E8B57);
 
-  static const Color primaryButtonDisabled = Color(0xFFA7D7B5);
+  static const Color primaryButtonDisabled = Color(0xFF2E7D32);
 }
 
 /// A fixed-size frame so the login flow always looks like a phone screen,
@@ -100,22 +101,19 @@ class PhoneFrame extends StatelessWidget {
 /// Resident authentication flow.
 ///
 /// Routing principle (two separate paths):
-/// - Log In (existing user): landing → mobile number → OTP → enter code →
-///   enter PIN → home. A number with no account is redirected to
-///   registration with a message.
-/// - Create Account (new user): landing → mobile number → OTP → create
-///   account form → create PIN → confirm PIN → home. A number that already
-///   exists is redirected to the Log In path with a message.
-/// No step can be skipped: PIN login requires a verified OTP + code in the
-/// same session ([_codeVerified]).
+/// - Log In (existing user): landing → email → OTP → home (dashboard). A
+///   missing account is redirected to registration with a message.
+/// - Create Account (new user): landing → email → OTP → create account
+///   form → home. An email that already exists is redirected to the Log In
+///   path (OTP already verified) with a message.
+/// The OTP is the single verification step for logging in.
 class LoginFlow extends StatefulWidget {
   /// Called once the resident is fully authenticated. Kept optional and
   /// generic (no import of home.dart here) so login.dart stays decoupled
   /// from what comes next — main.dart wires it up to actual navigation.
   final VoidCallback? onLoginSuccess;
 
-  /// Where the flow starts. `main.dart` picks PIN vs mobile number based on
-  /// [AuthStore.isReturningUser].
+  /// Where the flow starts.
   final LoginStep initialStep;
 
   const LoginFlow({
@@ -132,57 +130,34 @@ enum LoginStep {
   /// Landing page: "Log In or Create Account" entry point.
   landing,
 
-  /// First-time / logged-out entry: "Enter your mobile number to get started."
-  mobileNumber,
+  /// Email entry.
+  email,
 
-  /// OTP verification for the entered number.
+  /// OTP verification for the entered email.
   otp,
-
-  /// Existing account, new device: "Register this device?" gate.
-  trustDevice,
-
-  /// Log In flow, Step 3 of 4: verification/access code after OTP.
-  enterCode,
-
-  /// Returning-user fast path: masked number + PIN.
-  pinLogin,
 
   /// New account: barangay registration form.
   createAccount,
 
-  /// New account: choose a PIN (then confirm).
-  createPin,
-  confirmPin,
-
-  /// Forgot PIN recovery: OTP on the stored number…
-  forgotOtp,
-
-  /// …then set a replacement PIN (then confirm).
-  resetPin,
-  resetConfirm,
+  /// Success confirmation shown after an account is created.
+  accountCreated,
 }
 
 class _LoginFlowState extends State<LoginFlow> {
   late LoginStep _step;
-  String _phoneNumber = '';
-  String _pin = '';
-  String _resetPin = '';
+  String _email = '';
   ResidentProfile? _draftProfile;
   AuthStore? _auth;
 
-  /// Raw 10-digit number the resident typed, kept in the flow controller so
-  /// it survives navigation between steps (spec: "Preserve the entered
-  /// mobile number when moving between authentication screens").
-  String _phoneDigits = '';
+  /// Raw email the resident typed, kept in the flow controller so it
+  /// survives navigation between steps (spec: "Preserve the entered email
+  /// when moving between authentication screens").
+  String _emailDraft = '';
 
   /// Distinguishes the two landing choices even though both verify the
-  /// mobile number over OTP: false = "Log In" (existing account),
+  /// email over OTP: false = "Log In" (existing account),
   /// true = "Create Account" (new registration).
   bool _isRegistering = false;
-
-  /// Guards the Log In path so the PIN screen (and home) can't be reached
-  /// without passing OTP + access-code verification in the same session.
-  bool _codeVerified = false;
 
   @override
   void initState() {
@@ -196,11 +171,6 @@ class _LoginFlowState extends State<LoginFlow> {
     if (!mounted) return;
     setState(() {
       _auth = auth;
-      // Never strand the user on PIN login without a usable credential:
-      // fall back to the mobile-number entry instead.
-      if (_step == LoginStep.pinLogin && !auth.isReturningUser) {
-        _step = LoginStep.mobileNumber;
-      }
     });
   }
 
@@ -219,72 +189,29 @@ class _LoginFlowState extends State<LoginFlow> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// After OTP succeeds, route based on the landing choice:
-  /// - Log In expects an existing account and continues to the access-code
-  ///   step; a new number is redirected to registration with a message.
-  /// - Create Account expects a new number; an existing number is redirected
-  ///   to the Log In path instead of creating a duplicate.
+  /// Reserved for a future OTP step. For now registration proceeds
+  /// straight from the email screen to the profile form.
   void _handleOtpVerified() {
-    final auth = _auth;
-    if (auth == null) {
-      _goTo(LoginStep.createAccount);
-      return;
-    }
-    final exists = auth.accountMatches(_phoneNumber);
     if (_isRegistering) {
-      if (exists) {
-        setState(() {
-          _isRegistering = false;
-          _codeVerified = false;
-        });
-        _showFlowMessage(
-          'This number is already registered. Logging you in instead.',
-        );
-        if (auth.isDeviceTrusted) {
-          _goTo(LoginStep.enterCode);
-        } else {
-          _goTo(LoginStep.trustDevice);
-        }
-      } else {
-        _goTo(LoginStep.createAccount);
-      }
+      _goTo(LoginStep.createAccount);
     } else {
-      // In demo mode, any well-formed number is treated as an existing
-      // account so the Log In path always runs (no "account not found"),
-      // and the device-trust gate is skipped for the demo account.
-      if (exists || (AuthStore.demoMode && !_isRegistering)) {
-        setState(() => _codeVerified = false);
-        final demoLogin = AuthStore.demoMode && !auth.hasAccount;
-        if (auth.isDeviceTrusted || demoLogin) {
-          _goTo(LoginStep.enterCode);
-        } else {
-          _goTo(LoginStep.trustDevice);
-        }
-      } else {
-        setState(() => _isRegistering = true);
-        _showFlowMessage(
-          'No account found for this number. Let’s create one.',
-        );
-        _goTo(LoginStep.createAccount);
-      }
+      widget.onLoginSuccess?.call();
     }
   }
 
-  /// After the access code is accepted, allow the PIN step.
-  void _handleCodeVerified() {
-    setState(() => _codeVerified = true);
-    _goTo(LoginStep.pinLogin);
-  }
-
-  /// Persists a fresh registration: account + PIN hash + trusted device.
+  /// Persists a fresh registration: profile cache + trusted device.
+  /// The account itself was already inserted into `users` in
+  /// [CreateAccountScreen].
   Future<void> _finishRegistration() async {
     final auth = _auth;
     final profile = _draftProfile;
-    if (auth == null || profile == null || _pin.isEmpty) return;
+    if (auth == null || profile == null) return;
     await auth.saveRegistration(profile);
-    await auth.setPin(_pin);
     await auth.trustDevice();
   }
+
+  /// Maps a sign-in error to a user-friendly message.
+  String _authErrorMessage(ApiException e) => e.message;
 
   @override
   Widget build(BuildContext context) {
@@ -303,167 +230,103 @@ class _LoginFlowState extends State<LoginFlow> {
       case LoginStep.landing:
         screen = LandingScreen(
           key: const ValueKey('landing'),
-          auth: auth,
-          onLogin: (digits) {
-            // Log In goes straight to OTP using the number entered on the
-            // landing page — the standalone mobile-number screen is skipped.
+          onLogin: (emailValue, password) async {
             setState(() {
               _isRegistering = false;
-              _codeVerified = false;
-              _phoneNumber = '+63 $digits';
-              _phoneDigits = digits;
+              _email = emailValue.trim();
+              _emailDraft = emailValue.trim();
             });
-            _goTo(LoginStep.otp);
+            try {
+              // Authenticate against the existing `users` table via the
+              // resident_login Postgres function.
+              final profile = await ApiService.signIn(
+                emailValue.trim(),
+                password,
+              );
+              await auth.saveRegistration(profile);
+              await auth.trustDevice();
+              if (!mounted) return;
+              widget.onLoginSuccess?.call();
+            } on ApiException catch (e) {
+              if (!mounted) return;
+              _showFlowMessage(_authErrorMessage(e));
+            } catch (_) {
+              if (!mounted) return;
+              _showFlowMessage(
+                'Connection error. Please check your internet and try again.',
+              );
+            }
           },
           onCreateAccount: () {
             setState(() {
-              _phoneNumber = '';
+              _email = '';
               _isRegistering = true;
-              _codeVerified = false;
-              _phoneDigits = '';
+              _emailDraft = '';
             });
-            _goTo(LoginStep.mobileNumber);
+            // No OTP yet: registration goes straight to the profile form.
+            _goTo(LoginStep.email);
           },
         );
-      case LoginStep.mobileNumber:
-        screen = MobileNumberScreen(
-          key: ValueKey('mobile_${_isRegistering ? 'register' : 'login'}'),
-          initialNumber: _phoneDigits,
+      case LoginStep.email:
+        screen = EmailInputScreen(
+          key: ValueKey('email_${_isRegistering ? 'register' : 'login'}'),
+          initialEmail: _emailDraft,
           isRegistering: _isRegistering,
           onBack: () => _goTo(LoginStep.landing),
           onSwitchMode: () =>
               setState(() => _isRegistering = !_isRegistering),
-          onNumberChanged: (digits) => _phoneDigits = digits,
-          onOtpSent: (digits) {
+          onEmailChanged: (value) => _emailDraft = value,
+          onOtpSent: (emailValue) {
             setState(() {
-              _phoneNumber = '+63 $digits';
+              _email = emailValue.trim();
+              _emailDraft = emailValue.trim();
             });
-            _goTo(LoginStep.otp);
+            // OTP is not wired up yet — route by mode.
+            // Register → profile form; Log In → landing (direct login).
+            if (_isRegistering) {
+              _goTo(LoginStep.createAccount);
+            } else {
+              _goTo(LoginStep.landing);
+            }
           },
         );
       case LoginStep.otp:
         screen = OtpScreen(
           key: ValueKey('otp_${_isRegistering ? 'register' : 'login'}'),
-          phoneNumber: _phoneNumber,
+          email: _email,
           isRegistering: _isRegistering,
           onBack: () => _goTo(
-            _isRegistering ? LoginStep.mobileNumber : LoginStep.landing,
+            _isRegistering ? LoginStep.email : LoginStep.landing,
           ),
           onChangeNumber: () => _goTo(
-            _isRegistering ? LoginStep.mobileNumber : LoginStep.landing,
+            _isRegistering ? LoginStep.email : LoginStep.landing,
           ),
           onVerified: _handleOtpVerified,
-        );
-      case LoginStep.trustDevice:
-        screen = TrustDeviceScreen(
-          key: const ValueKey('trustDevice'),
-          phoneNumber: _phoneNumber,
-          onRegister: () async {
-            await auth.trustDevice();
-            _goTo(LoginStep.enterCode);
-          },
-          onUseDifferentNumber: () {
-            setState(() {
-              _isRegistering = false;
-              _codeVerified = false;
-            });
-            _goTo(LoginStep.mobileNumber);
-          },
-        );
-      case LoginStep.enterCode:
-        screen = EnterAccessCodeScreen(
-          key: const ValueKey('enterCode'),
-          phoneNumber: _phoneNumber,
-          onBack: () => _goTo(LoginStep.otp),
-          onVerified: _handleCodeVerified,
-        );
-      case LoginStep.pinLogin:
-        // Hard guard: PIN login requires a verified access code this
-        // session, so the OTP → code → PIN sequence can't be skipped.
-        if (!_codeVerified) {
-          screen = EnterAccessCodeScreen(
-            key: const ValueKey('enterCode_guard'),
-            phoneNumber: _phoneNumber,
-            onBack: () => _goTo(LoginStep.landing),
-            onVerified: _handleCodeVerified,
-          );
-          break;
-        }
-        screen = EnterPinScreen(
-          key: const ValueKey('pinLogin'),
-          auth: auth,
-          phoneNumber: _phoneNumber,
-          onBack: () => _goTo(
-            _codeVerified ? LoginStep.enterCode : LoginStep.landing,
-          ),
-          onForgotPin: () => _goTo(LoginStep.forgotOtp),
-          onUseDifferentNumber: () {
-            setState(() {
-              _isRegistering = false;
-              _codeVerified = false;
-            });
-            _goTo(LoginStep.mobileNumber);
-          },
-          onVerified: () {
-            widget.onLoginSuccess?.call();
-          },
         );
       case LoginStep.createAccount:
         screen = CreateAccountScreen(
           key: const ValueKey('createAccount'),
-          phoneNumber: _phoneNumber,
-          onBack: () => _goTo(LoginStep.otp),
-          onAccountCreated: (profile) {
-            setState(() => _draftProfile = profile);
-            _goTo(LoginStep.createPin);
-          },
-        );
-      case LoginStep.createPin:
-        screen = CreatePinScreen(
-          key: const ValueKey('createPin'),
-          onBack: () => _goTo(LoginStep.createAccount),
-          onPinCreated: (pin) {
-            setState(() => _pin = pin);
-            _goTo(LoginStep.confirmPin);
-          },
-        );
-      case LoginStep.confirmPin:
-        screen = ConfirmPinScreen(
-          key: const ValueKey('confirmPin'),
-          expectedPin: _pin,
-          onBack: () => _goTo(LoginStep.createPin),
-          onConfirmed: () async {
+          email: _email,
+          onBack: () => _goTo(LoginStep.landing),
+          onAccountCreated: (profile, password) async {
+            setState(() {
+              _draftProfile = profile;
+            });
             await _finishRegistration();
-            widget.onLoginSuccess?.call();
+            if (!mounted) return;
+            setState(() {
+              _isRegistering = false;
+              _emailDraft = _email;
+              _step = LoginStep.accountCreated;
+            });
           },
         );
-      case LoginStep.forgotOtp:
-        final accountPhone = auth.account?.phoneNumber ?? _phoneNumber;
-        screen = OtpScreen(
-          key: const ValueKey('forgotOtp'),
-          phoneNumber: accountPhone,
-          onBack: () => _goTo(LoginStep.pinLogin),
-          onChangeNumber: () => _goTo(LoginStep.pinLogin),
-          onVerified: () {
-            _goTo(LoginStep.resetPin);
-          },
-        );
-      case LoginStep.resetPin:
-        screen = CreatePinScreen(
-          key: const ValueKey('resetPin'),
-          onBack: () => _goTo(LoginStep.pinLogin),
-          onPinCreated: (pin) {
-            setState(() => _resetPin = pin);
-            _goTo(LoginStep.resetConfirm);
-          },
-        );
-      case LoginStep.resetConfirm:
-        screen = ConfirmPinScreen(
-          key: const ValueKey('resetConfirm'),
-          expectedPin: _resetPin,
-          onBack: () => _goTo(LoginStep.resetPin),
-          onConfirmed: () async {
-            await auth.setPin(_resetPin);
+      case LoginStep.accountCreated:
+        screen = AccountCreatedScreen(
+          key: const ValueKey('accountCreated'),
+          onContinue: () {
+            // Account is created and the session is live — continue
+            // straight into the dashboard.
             widget.onLoginSuccess?.call();
           },
         );
@@ -588,23 +451,18 @@ class StepHeader extends StatelessWidget {
   }
 }
 
-
-
 /// ---------------------------------------------------------------------
 /// LANDING — Log In or Create Account
 /// ---------------------------------------------------------------------
 /// App entry point: the landing page offers "Log In" for existing
-/// residents and "Create Account" for new ones. Returning residents
-/// (trusted device + PIN) see a "Welcome back" greeting with their
-/// masked number; both paths start at mobile-number verification.
+/// residents and "Create Account" for new ones. Both paths start at
+/// email verification.
 class LandingScreen extends StatefulWidget {
-  final AuthStore auth;
-  final ValueChanged<String> onLogin;
+  final void Function(String email, String password) onLogin;
   final VoidCallback onCreateAccount;
 
   const LandingScreen({
     super.key,
-    required this.auth,
     required this.onLogin,
     required this.onCreateAccount,
   });
@@ -618,6 +476,7 @@ class _LandingScreenState extends State<LandingScreen> {
   final TextEditingController _passwordController = TextEditingController();
   final FocusNode _emailFocus = FocusNode();
   final FocusNode _passwordFocus = FocusNode();
+  bool _obscurePassword = true;
 
   @override
   void dispose() {
@@ -630,10 +489,6 @@ class _LandingScreenState extends State<LandingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final auth = widget.auth;
-    final isReturning = auth.isReturningUser;
-    final name = auth.account?.displayName.trim() ?? '';
-
     return Scaffold(
       backgroundColor: AppColors.primaryDark,
       body: SafeArea(
@@ -679,53 +534,6 @@ class _LandingScreenState extends State<LandingScreen> {
                         height: 1.2,
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    Text(
-                      isReturning && name.isNotEmpty
-                          ? 'Welcome back, $name!'
-                          : 'Report incidents, track response,\nand stay safe.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: AppColors.primaryLight,
-                        fontSize: 14,
-                        height: 1.5,
-                      ),
-                    ),
-                    if (isReturning) ...[
-                      const SizedBox(height: 14),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.15),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.verified_user_outlined,
-                              size: 16,
-                              color: AppColors.primaryLight,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              auth.maskedPhone,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13.5,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -753,7 +561,7 @@ class _LandingScreenState extends State<LandingScreen> {
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    'PHONE NUMBER',
+                    'EMAIL ADDRESS',
                     style: TextStyle(
                       fontSize: 11.5,
                       fontWeight: FontWeight.w700,
@@ -765,27 +573,56 @@ class _LandingScreenState extends State<LandingScreen> {
                   _CredentialField(
                     controller: _emailController,
                     focusNode: _emailFocus,
-                    hint: 'Phone Number',
-                    icon: Icons.phone_outlined,
+                    hint: 'yourname@email.com',
+                    icon: Icons.mail_outline,
                     obscure: false,
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'PASSWORD',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.6,
+                      color: AppColors.textGray,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _PasswordField(
+                    controller: _passwordController,
+                    focusNode: _passwordFocus,
+                    obscure: _obscurePassword,
+                    onToggleVisibility: () => setState(
+                      () => _obscurePassword = !_obscurePassword,
+                    ),
                   ),
                   const SizedBox(height: 18),
                   SizedBox(
                     height: 54,
                     child: ElevatedButton(
                       onPressed: () {
-                        final digits = _emailController.text.trim();
-                        if (digits.length == 10) {
-                          widget.onLogin(digits);
-                        } else {
+                        final email = _emailController.text.trim();
+                        final password = _passwordController.text;
+                        final validEmail = RegExp(
+                          r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
+                        ).hasMatch(email);
+                        if (!validEmail) {
                           ScaffoldMessenger.of(context)
                             ..hideCurrentSnackBar()
                             ..showSnackBar(const SnackBar(
-                              content: Text(
-                                'Enter all 10 digits (e.g. 9171234567)',
-                              ),
+                              content: Text('Enter a valid email address'),
                             ));
+                          return;
                         }
+                        if (password.isEmpty) {
+                          ScaffoldMessenger.of(context)
+                            ..hideCurrentSnackBar()
+                            ..showSnackBar(const SnackBar(
+                              content: Text('Enter your password'),
+                            ));
+                          return;
+                        }
+                        widget.onLogin(email, password);
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.primaryButton,
@@ -919,30 +756,86 @@ class _CredentialField extends StatelessWidget {
   }
 }
 
+class _PasswordField extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool obscure;
+  final VoidCallback onToggleVisibility;
+
+  const _PasswordField({
+    required this.controller,
+    required this.focusNode,
+    required this.obscure,
+    required this.onToggleVisibility,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: focusNode.hasFocus ? AppColors.primary : AppColors.border,
+          width: focusNode.hasFocus ? 1.6 : 1,
+        ),
+        color: Colors.white,
+      ),
+      child: TextField(
+        controller: controller,
+        focusNode: focusNode,
+        obscureText: obscure,
+        style: const TextStyle(fontSize: 15, color: AppColors.textDark),
+        decoration: InputDecoration(
+          border: InputBorder.none,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+          hintText: 'Password',
+          hintStyle: const TextStyle(color: AppColors.hint),
+          prefixIcon: Icon(
+            Icons.lock_outline,
+            size: 20,
+            color: focusNode.hasFocus
+                ? AppColors.primary
+                : AppColors.textGray,
+          ),
+          suffixIcon: IconButton(
+            onPressed: onToggleVisibility,
+            icon: Icon(
+              obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+              size: 20,
+              color: AppColors.textGray,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// ---------------------------------------------------------------------
 /// STEP 1 — Enter Mobile Number
 /// ---------------------------------------------------------------------
-class MobileNumberScreen extends StatefulWidget {
-  /// Null hides the back arrow — the mobile-number screen is a root entry
+class EmailInputScreen extends StatefulWidget {
+  /// Null hides the back arrow — the email screen is a root entry
   /// point for first-time users.
   final VoidCallback? onBack;
   final ValueChanged<String> onOtpSent;
 
-  /// Raw digits to restore if the screen is revisited (number preservation).
-  final String initialNumber;
-  final ValueChanged<String> onNumberChanged;
+  /// Raw email to restore if the screen is revisited (preservation).
+  final String initialEmail;
+  final ValueChanged<String> onEmailChanged;
 
   /// False = "Log In" flow, true = "Create Account" flow. Both verify the
-  /// number over OTP, but headers, copy, and post-OTP routing differ.
+  /// email over OTP, but headers, copy, and post-OTP routing differ.
   final bool isRegistering;
   final VoidCallback? onSwitchMode;
 
-  const MobileNumberScreen({
+  const EmailInputScreen({
     super.key,
     required this.onBack,
     required this.onOtpSent,
-    this.initialNumber = '',
-    this.onNumberChanged = _noopChange,
+    this.initialEmail = '',
+    this.onEmailChanged = _noopChange,
     this.isRegistering = false,
     this.onSwitchMode,
   });
@@ -950,20 +843,21 @@ class MobileNumberScreen extends StatefulWidget {
   static void _noopChange(String _) {}
 
   @override
-  State<MobileNumberScreen> createState() => _MobileNumberScreenState();
+  State<EmailInputScreen> createState() => _EmailInputScreenState();
 }
 
-class _MobileNumberScreenState extends State<MobileNumberScreen> {
+class _EmailInputScreenState extends State<EmailInputScreen> {
   late final TextEditingController _controller;
   final FocusNode _focusNode = FocusNode();
   bool _isSending = false;
 
-  bool get _isValid => _controller.text.length == 10;
+  bool get _isValid =>
+      RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(_controller.text.trim());
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.initialNumber);
+    _controller = TextEditingController(text: widget.initialEmail);
   }
 
   @override
@@ -976,12 +870,12 @@ class _MobileNumberScreenState extends State<MobileNumberScreen> {
   void _handleSendOtp() async {
     if (!_isValid || _isSending) return;
     setState(() => _isSending = true);
-    await Future.delayed(const Duration(milliseconds: 1500));
+    // OTP isn't wired up yet — continue straight to the profile form.
     if (mounted) {
       // Release focus before the screen is replaced so the web engine can't
       // race a pending geometry update against a torn-down input element.
       FocusManager.instance.primaryFocus?.unfocus();
-      widget.onOtpSent(_controller.text);
+      widget.onOtpSent(_controller.text.trim());
     }
   }
 
@@ -1002,8 +896,8 @@ class _MobileNumberScreenState extends State<MobileNumberScreen> {
             StepHeader(
               onBack: widget.onBack,
               stepLabel: widget.isRegistering
-                  ? 'Create Account · Step 1 of 4'
-                  : 'Log In · Step 1 of 4',
+                  ? 'Create Account · Step 1 of 3'
+                  : 'Log In · Step 1 of 2',
               title: widget.isRegistering ? 'Create Account' : 'Log In',
               progress: 0.25,
             ),
@@ -1026,11 +920,10 @@ class _MobileNumberScreenState extends State<MobileNumberScreen> {
                     const SizedBox(height: 8),
                     Text(
                       widget.isRegistering
-                          ? 'Enter your mobile number to register. We will '
-                              'send a one-time password (OTP) to verify it.'
-                          : 'Enter the mobile number linked to your account. '
-                              'We will send a one-time password (OTP) to '
-                              'verify it’s you.',
+                          ? 'Enter your email to register. It will be used '
+                              'for your account and alert notifications.'
+                          : 'Enter the email linked to your account to '
+                              'continue.',
                       style: const TextStyle(
                         fontSize: 14,
                         height: 1.4,
@@ -1039,7 +932,7 @@ class _MobileNumberScreenState extends State<MobileNumberScreen> {
                     ),
                     const SizedBox(height: 22),
                     const Text(
-                      'MOBILE NUMBER',
+                      'EMAIL ADDRESS',
                       style: TextStyle(
                         fontSize: 11.5,
                         fontWeight: FontWeight.w700,
@@ -1061,66 +954,39 @@ class _MobileNumberScreenState extends State<MobileNumberScreen> {
                         ),
                         color: Colors.white,
                       ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 16,
-                            ),
-                            decoration: const BoxDecoration(
-                              border: Border(
-                                right: BorderSide(color: AppColors.border),
-                              ),
-                            ),
-                            child: const Text(
-                              'PH  +63',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14.5,
-                                color: AppColors.textDark,
-                              ),
-                            ),
+                      child: TextField(
+                        controller: _controller,
+                        focusNode: _focusNode,
+                        keyboardType: TextInputType.emailAddress,
+                        autocorrect: false,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: AppColors.textDark,
+                        ),
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 16,
                           ),
-                          Expanded(
-                            child: TextField(
-                              controller: _controller,
-                              focusNode: _focusNode,
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly,
-                                LengthLimitingTextInputFormatter(10),
-                              ],
-                              style: const TextStyle(
-                                fontSize: 17,
-                                letterSpacing: 1.5,
-                                color: AppColors.textDark,
-                              ),
-                              decoration: const InputDecoration(
-                                border: InputBorder.none,
-                                contentPadding: EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 16,
-                                ),
-                                hintText: '9XX XXX XXXX',
-                                hintStyle: TextStyle(
-                                  color: AppColors.hint,
-                                  letterSpacing: 1.5,
-                                ),
-                              ),
-                              onChanged: (value) {
-                                widget.onNumberChanged(value);
-                                setState(() {});
-                              },
-                            ),
+                          hintText: 'yourname@email.com',
+                          hintStyle: TextStyle(color: AppColors.hint),
+                          prefixIcon: Icon(
+                            Icons.mail_outline,
+                            size: 20,
+                            color: AppColors.textGray,
                           ),
-                        ],
+                        ),
+                        onChanged: (value) {
+                          widget.onEmailChanged(value);
+                          setState(() {});
+                        },
                       ),
                     ),
                     if (showError) ...[
                       const SizedBox(height: 6),
                       const Text(
-                        'Enter all 10 digits (e.g. 9171234567)',
+                        'Enter a valid email address',
                         style: TextStyle(
                           color: AppColors.errorText,
                           fontSize: 12.5,
@@ -1146,9 +1012,9 @@ class _MobileNumberScreenState extends State<MobileNumberScreen> {
                           SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'Your number is used only for account '
-                              'verification and SMS alerts. It is never '
-                              'shared with third parties.',
+                              'Your email is used only for account '
+                              'verification and alert notifications. It is '
+                              'never shared with third parties.',
                               style: TextStyle(
                                 fontSize: 12.5,
                                 height: 1.4,
@@ -1159,19 +1025,6 @@ class _MobileNumberScreenState extends State<MobileNumberScreen> {
                         ],
                       ),
                     ),
-                    if (AuthStore.demoMode && !widget.isRegistering) ...[
-                      const SizedBox(height: 12),
-                      Center(
-                        child: Text(
-                          'Demo: any valid number works (e.g. 9171234567)',
-                          style: const TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ),
-                    ],
                     const SizedBox(height: 22),
                     SizedBox(
                       width: double.infinity,
@@ -1241,7 +1094,7 @@ class _MobileNumberScreenState extends State<MobileNumberScreen> {
 /// STEP 2 — Verify OTP
 /// ---------------------------------------------------------------------
 class OtpScreen extends StatefulWidget {
-  final String phoneNumber;
+  final String email;
   final VoidCallback onBack;
   final VoidCallback onChangeNumber;
   final VoidCallback onVerified;
@@ -1251,7 +1104,7 @@ class OtpScreen extends StatefulWidget {
 
   const OtpScreen({
     super.key,
-    required this.phoneNumber,
+    required this.email,
     required this.onBack,
     required this.onChangeNumber,
     required this.onVerified,
@@ -1391,7 +1244,7 @@ class _OtpScreenState extends State<OtpScreen> {
               onBack: widget.onBack,
               stepLabel: widget.isRegistering
                   ? 'Create Account · Step 2 of 4'
-                  : 'Log In · Step 2 of 4',
+                  : 'Log In · Step 2 of 2',
               title: widget.isRegistering ? 'Verify to Register' : 'Verify to Log In',
               progress: 0.5,
             ),
@@ -1421,9 +1274,9 @@ class _OtpScreenState extends State<OtpScreen> {
                         children: [
                           const TextSpan(text: 'A 6-digit code was sent to '),
                           TextSpan(
-                            text: widget.phoneNumber.isEmpty
-                                ? '+63 9XX XXX XXXX'
-                                : widget.phoneNumber,
+                            text: widget.email.isEmpty
+                                ? 'your email'
+                                : AuthStore.maskEmail(widget.email),
                             style: const TextStyle(
                               color: AppColors.primary,
                               fontWeight: FontWeight.w700,
@@ -1450,19 +1303,6 @@ class _OtpScreenState extends State<OtpScreen> {
                         );
                       }),
                     ),
-                    if (AuthStore.demoMode) ...[
-                      const SizedBox(height: 10),
-                      Center(
-                        child: Text(
-                          'Demo: enter any 6-digit code (e.g. 111111)',
-                          style: const TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ),
-                    ],
                     const SizedBox(height: 10),
                     const Center(
                       child: Text(
@@ -1526,7 +1366,7 @@ class _OtpScreenState extends State<OtpScreen> {
                                 fontWeight: FontWeight.w600,
                                 color: _secondsLeft == 0
                                     ? AppColors.primary
-                                    : AppColors.textGray.withOpacity(0.5),
+                                    : AppColors.textGray.withValues(alpha: 0.5),
                               ),
                             ),
                           ),
@@ -1720,16 +1560,17 @@ class _OtpBoxState extends State<_OtpBox> with SingleTickerProviderStateMixin {
 /// FINAL STEP — Create Account (Resident Profile)
 /// ---------------------------------------------------------------------
 class CreateAccountScreen extends StatefulWidget {
-  final String phoneNumber;
+  final String email;
   final VoidCallback onBack;
 
   /// Returns the collected resident profile so the flow can persist the
-  /// account once the PIN is confirmed.
-  final ValueChanged<ResidentProfile> onAccountCreated;
+  /// account once the form is submitted.
+  final void Function(ResidentProfile profile, String password)
+      onAccountCreated;
 
   const CreateAccountScreen({
     super.key,
-    required this.phoneNumber,
+    required this.email,
     required this.onBack,
     required this.onAccountCreated,
   });
@@ -1743,7 +1584,12 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   final TextEditingController _middleNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
 
   DateTime? _dateOfBirth;
   String? _sex;
@@ -1765,7 +1611,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     _middleNameController.dispose();
     _lastNameController.dispose();
     _addressController.dispose();
-    _emailController.dispose();
+    _phoneController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
     _reverseDebounce?.cancel();
     _mapController.dispose();
     super.dispose();
@@ -1986,23 +1834,24 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     return age;
   }
 
+  static final RegExp _phoneRegex = RegExp(r'^(09|\+639)\d{9}$');
+
+  bool get _isPhoneValid {
+    final phone = _phoneController.text.replaceAll(RegExp(r'[\s\-]'), '');
+    return _phoneRegex.hasMatch(phone);
+  }
+
   bool get _isValid =>
       _firstNameController.text.trim().isNotEmpty &&
       _lastNameController.text.trim().isNotEmpty &&
       _dateOfBirth != null &&
       _sex != null &&
       _civilStatus != null &&
-      _addressController.text.trim().isNotEmpty;
-
-  String get _maskedNumber {
-    if (widget.phoneNumber.isEmpty) return '+63 XXX XXXX';
-    // Mask the middle digits, keep country code + last few visible, e.g.
-    // "+63 XXX XXXX" as shown in the reference design.
-    final digits = widget.phoneNumber.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.length < 4) return widget.phoneNumber;
-    final last4 = digits.substring(digits.length - 4);
-    return '+63 XXX $last4';
-  }
+      _addressController.text.trim().isNotEmpty &&
+      _isPhoneValid &&
+      AuthStore.isValidPassword(_passwordController.text) &&
+      _confirmPasswordController.text.isNotEmpty &&
+      _confirmPasswordController.text == _passwordController.text;
 
   Future<void> _pickDateOfBirth() async {
     final now = DateTime.now();
@@ -2018,20 +1867,87 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     }
   }
 
+  void _showMissingFieldsWarning() {
+    final missing = <String>[];
+    if (_firstNameController.text.trim().isEmpty) missing.add('First Name');
+    if (_lastNameController.text.trim().isEmpty) missing.add('Last Name');
+    if (_dateOfBirth == null) missing.add('Date of Birth');
+    if (_sex == null) missing.add('Sex');
+    if (_civilStatus == null) missing.add('Civil Status');
+    if (_addressController.text.trim().isEmpty) missing.add('Home Address');
+    if (!_isPhoneValid) missing.add('Phone Number');
+    if (!AuthStore.isValidPassword(_passwordController.text)) {
+      missing.add('Password');
+    }
+    if (_confirmPasswordController.text.isEmpty ||
+        _confirmPasswordController.text != _passwordController.text) {
+      missing.add('Confirm Password');
+    }
+
+    final String message;
+    if (missing.length <= 2) {
+      message = 'Please fill in the required fields: ${missing.join(" and ")}.';
+    } else {
+      message = 'Please fill in all required fields (${missing.length} missing).';
+    }
+
+    _showSnack(message);
+  }
+
   void _handleCreateAccount() async {
-    if (!_isValid || _isSubmitting) return;
+    if (!_isValid || _isSubmitting) {
+      if (!_isValid) _showMissingFieldsWarning();
+      return;
+    }
     setState(() => _isSubmitting = true);
-    await Future.delayed(const Duration(milliseconds: 1200));
-    if (mounted) {
-      widget.onAccountCreated(
-        ResidentProfile(
-          phoneNumber: widget.phoneNumber,
-          firstName: _firstNameController.text.trim(),
-          lastName: _lastNameController.text.trim(),
-          address: _addressController.text.trim(),
-          createdAtIso: DateTime.now().toIso8601String(),
-        ),
+
+    try {
+      final profile = ResidentProfile(
+        email: widget.email,
+        firstName: _firstNameController.text.trim(),
+        middleName: _middleNameController.text.trim(),
+        lastName: _lastNameController.text.trim(),
+        dateOfBirth: _dateOfBirth == null
+            ? ''
+            : _dateOfBirth!.toIso8601String().substring(0, 10),
+        sex: _sex ?? '',
+        civilStatus: _civilStatus ?? '',
+        address: _addressController.text.trim(),
+        phoneNumber: _phoneController.text.replaceAll(RegExp(r'[\s\-]'), ''),
+        createdAtIso: DateTime.now().toIso8601String(),
       );
+
+      // Create the Resident in the existing `users` table via the
+      // resident_register Postgres function (bcrypt hash server-side).
+      await ApiService.register(
+        firstName: profile.firstName,
+        middleName: profile.middleName,
+        lastName: profile.lastName,
+        email: profile.email,
+        phone: profile.phoneNumber,
+        password: _passwordController.text,
+        dateOfBirth: profile.dateOfBirth,
+        sex: profile.sex,
+        civilStatus: profile.civilStatus,
+        address: profile.address,
+      );
+
+      // Hand the completed registration back to the flow controller.
+      if (mounted) {
+        widget.onAccountCreated(profile, _passwordController.text);
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+        _showSnack(e.message);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+        _showSnack(
+          'Connection error. Please check your internet and try again.',
+        );
+      }
     }
   }
 
@@ -2046,10 +1962,10 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           children: [
             _SegmentedStepHeader(
               onBack: widget.onBack,
-              stepLabel: 'Final Step',
+              stepLabel: 'Create Account · Step 2 of 3',
               title: 'Create your account',
               segments: 3,
-              filledSegments: 3,
+              filledSegments: 2,
             ),
             Expanded(
               child: SingleChildScrollView(
@@ -2351,13 +2267,26 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                           ),
                         ],
                         const SizedBox(height: 18),
-                        _FieldLabel('EMAIL ADDRESS (OPTIONAL)'),
+                        _FieldLabel('PHONE NUMBER', required: true),
                         const SizedBox(height: 8),
                         _TextInputBox(
-                          controller: _emailController,
-                          hintText: 'yourname@email.com',
-                          keyboardType: TextInputType.emailAddress,
+                          controller: _phoneController,
+                          hintText: '09XX XXX XXXX or +639XX XXX XXXX',
+                          keyboardType: TextInputType.phone,
+                          onChanged: (_) => setState(() {}),
                         ),
+                        if (_phoneController.text.isNotEmpty &&
+                            !_isPhoneValid) ...[
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Enter a valid Philippine mobile number '
+                            '(e.g. 09171234567).',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: AppColors.errorText,
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 18),
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -2381,7 +2310,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     const Text(
-                                      'Linked Mobile Number',
+                                      'Email Address',
                                       style: TextStyle(
                                         fontSize: 11.5,
                                         color: AppColors.textGray,
@@ -2389,7 +2318,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
-                                      _maskedNumber,
+                                      widget.email,
                                       style: const TextStyle(
                                         fontSize: 15,
                                         fontWeight: FontWeight.bold,
@@ -2405,21 +2334,79 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                                   vertical: 5,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: AppColors.statusResolvedBg,
+                                  color: AppColors.infoBg,
                                   borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: AppColors.infoBorder,
+                                  ),
                                 ),
                                 child: const Text(
-                                  'Verified',
+                                  'New account',
                                   style: TextStyle(
                                     fontSize: 11.5,
                                     fontWeight: FontWeight.w600,
-                                    color: AppColors.statusResolvedText,
+                                    color: AppColors.textGray,
                                   ),
                                 ),
                               ),
                             ],
                           ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // ---- Account password ----
+                    _SectionCard(
+                      title: 'ACCOUNT PASSWORD',
+                      children: [
+                        _FieldLabel('PASSWORD', required: true),
+                        const SizedBox(height: 8),
+                        _SecureInputBox(
+                          controller: _passwordController,
+                          hintText: 'At least ${AuthStore.minPasswordLength} characters',
+                          obscure: _obscurePassword,
+                          onToggleVisibility: () => setState(
+                            () => _obscurePassword = !_obscurePassword,
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                        const SizedBox(height: 10),
+                        _PasswordPolicyChecklist(password: _passwordController.text),
+                        if (_passwordController.text.isNotEmpty &&
+                            !AuthStore.isValidPassword(_passwordController.text)) ...[
+                          const SizedBox(height: 10),
+                          _PasswordPolicyErrors(
+                            errors: AuthStore.passwordPolicyErrors(
+                              _passwordController.text,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 18),
+                        _FieldLabel('CONFIRM PASSWORD', required: true),
+                        const SizedBox(height: 8),
+                        _SecureInputBox(
+                          controller: _confirmPasswordController,
+                          hintText: 'Re-enter your password',
+                          obscure: _obscureConfirmPassword,
+                          onToggleVisibility: () => setState(
+                            () => _obscureConfirmPassword =
+                                !_obscureConfirmPassword,
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                        if (_confirmPasswordController.text.isNotEmpty &&
+                            _confirmPasswordController.text !=
+                                _passwordController.text) ...[
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Passwords do not match.',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: AppColors.errorText,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -2498,6 +2485,93 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Success confirmation shown after a new account is created. Displays a
+/// checkmark, a clear message, and a Continue button that returns the
+/// user to the Login page.
+class AccountCreatedScreen extends StatelessWidget {
+  final VoidCallback onContinue;
+
+  const AccountCreatedScreen({
+    super.key,
+    required this.onContinue,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 80, 28, 32),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Spacer(),
+              Container(
+                width: 96,
+                height: 96,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.success,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.check_circle,
+                  size: 56,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 28),
+              const Text(
+                'Account Created Successfully!',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Your account has been created successfully.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14.5,
+                  height: 1.4,
+                  color: AppColors.textGray,
+                ),
+              ),
+              const Spacer(),
+              SizedBox(
+                height: 54,
+                child: ElevatedButton(
+                  onPressed: onContinue,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryButton,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: const Text(
+                    'Continue',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2754,8 +2828,8 @@ class _SegmentedStepHeader extends StatelessWidget {
                   margin: EdgeInsets.only(right: i == segments - 1 ? 0 : 6),
                   decoration: BoxDecoration(
                     color: filled
-                        ? AppColors.primary.withOpacity(0.9)
-                        : Colors.white.withOpacity(0.25),
+                        ? AppColors.primary.withValues(alpha: 0.9)
+                        : Colors.white.withValues(alpha: 0.25),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -2836,6 +2910,150 @@ class _FieldLabel extends StatelessWidget {
   }
 }
 
+class _PasswordPolicyChecklist extends StatelessWidget {
+  final String password;
+
+  const _PasswordPolicyChecklist({required this.password});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Password requirements',
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textGray,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _PolicyRow(
+            label: 'At least ${AuthStore.minPasswordLength} characters',
+            met: password.length >= AuthStore.minPasswordLength,
+          ),
+          _PolicyRow(
+            label: 'At least one uppercase letter',
+            met: RegExp(r'[A-Z]').hasMatch(password),
+          ),
+          _PolicyRow(
+            label: 'At least one lowercase letter',
+            met: RegExp(r'[a-z]').hasMatch(password),
+          ),
+          _PolicyRow(
+            label: 'At least one number',
+            met: RegExp(r'[0-9]').hasMatch(password),
+          ),
+          _PolicyRow(
+            label: 'At least one special character (e.g. @, #, \$, !)',
+            met: RegExp(r'[^A-Za-z0-9]').hasMatch(password),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PolicyRow extends StatelessWidget {
+  final String label;
+  final bool met;
+
+  const _PolicyRow({required this.label, required this.met});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            met ? Icons.check_circle : Icons.cancel,
+            size: 15,
+            color: met ? AppColors.success : AppColors.hint,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: met ? AppColors.textDark : AppColors.hint,
+                fontWeight: met ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PasswordPolicyErrors extends StatelessWidget {
+  final List<String> errors;
+
+  const _PasswordPolicyErrors({required this.errors});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.hotlineBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.hotlineBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Password must:',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: AppColors.hotlineRed,
+            ),
+          ),
+          const SizedBox(height: 4),
+          for (final error in errors)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '• ',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.hotlineRed,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      error,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.hotlineRed,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Plain bordered text input box shared by the form fields on this screen.
 class _TextInputBox extends StatelessWidget {
   final TextEditingController controller;
@@ -2874,6 +3092,58 @@ class _TextInputBox extends StatelessWidget {
           ),
           hintText: hintText,
           hintStyle: const TextStyle(color: AppColors.hint),
+        ),
+      ),
+    );
+  }
+}
+
+class _SecureInputBox extends StatelessWidget {
+  final TextEditingController controller;
+  final String hintText;
+  final bool obscure;
+  final ValueChanged<String>? onChanged;
+  final VoidCallback onToggleVisibility;
+
+  const _SecureInputBox({
+    required this.controller,
+    required this.hintText,
+    required this.obscure,
+    required this.onToggleVisibility,
+    this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: TextField(
+        controller: controller,
+        obscureText: obscure,
+        onChanged: onChanged,
+        style: const TextStyle(fontSize: 14.5, color: AppColors.textDark),
+        decoration: InputDecoration(
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 16,
+          ),
+          hintText: hintText,
+          hintStyle: const TextStyle(color: AppColors.hint),
+          suffixIcon: IconButton(
+            onPressed: onToggleVisibility,
+            icon: Icon(
+              obscure
+                  ? Icons.visibility_outlined
+                  : Icons.visibility_off_outlined,
+              size: 20,
+              color: AppColors.textGray,
+            ),
+          ),
         ),
       ),
     );
@@ -2924,1483 +3194,3 @@ class _PillOption extends StatelessWidget {
   }
 }
 
-/// ---------------------------------------------------------------------
-/// STEP — Create PIN (Step 1 of 2 of the PIN setup mini-flow)
-/// ---------------------------------------------------------------------
-class CreatePinScreen extends StatefulWidget {
-  final VoidCallback onBack;
-  final ValueChanged<String> onPinCreated;
-
-  const CreatePinScreen({
-    super.key,
-    required this.onBack,
-    required this.onPinCreated,
-  });
-
-  @override
-  State<CreatePinScreen> createState() => _CreatePinScreenState();
-}
-
-class _CreatePinScreenState extends State<CreatePinScreen> {
-  static const int _pinLength = 6;
-  static const int _minPinLength = 4;
-  final List<TextEditingController> _controllers = List.generate(
-    _pinLength,
-    (_) => TextEditingController(),
-  );
-  final List<FocusNode> _focusNodes = List.generate(
-    _pinLength,
-    (_) => FocusNode(),
-  );
-  bool _obscurePin = true;
-  bool _isSubmitting = false;
-  String? _errorText;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _focusNodes.first.requestFocus();
-    });
-  }
-
-  @override
-  void dispose() {
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    for (final f in _focusNodes) {
-      f.dispose();
-    }
-    super.dispose();
-  }
-
-  String get _pin => _controllers.map((c) => c.text).join();
-  bool get _isValid =>
-      _pin.length >= _minPinLength && _pin.length <= _pinLength;
-
-  void _onDigitChanged(int index, String value) {
-    if (value.isNotEmpty && index < _pinLength - 1) {
-      _focusNodes[index + 1].requestFocus();
-    }
-    if (value.isEmpty && index > 0) {
-      _focusNodes[index - 1].requestFocus();
-    }
-    setState(() => _errorText = null);
-  }
-
-  void _handleContinue() async {
-    if (!_isValid || _isSubmitting) return;
-    if (_pin.length < _minPinLength) {
-      setState(
-        () => _errorText = 'PIN must be $_minPinLength–$_pinLength digits.',
-      );
-      return;
-    }
-    setState(() => _isSubmitting = true);
-    await Future.delayed(const Duration(milliseconds: 400));
-    if (mounted) widget.onPinCreated(_pin);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            StepHeader(
-              onBack: widget.onBack,
-              stepLabel: 'Step 1 of 2',
-              title: 'Create your PIN',
-              progress: 0.5,
-            ),
-            Expanded(
-              child: _PinEntryBody(
-                title: 'Create your PIN',
-                subtitle:
-                    'Create a secure $_minPinLength–$_pinLength digit PIN. '
-                    'You will use this every time you log in.',
-                controllers: _controllers,
-                focusNodes: _focusNodes,
-                errorText: _errorText,
-                onChanged: _onDigitChanged,
-                obscureText: _obscurePin,
-                onToggleVisibility: () =>
-                    setState(() => _obscurePin = !_obscurePin),
-                actionLabel: 'Continue',
-                actionEnabled: _isValid,
-                isBusy: _isSubmitting,
-                onAction: _handleContinue,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// ---------------------------------------------------------------------
-/// STEP — Confirm PIN (Step 2 of 2 of the PIN setup mini-flow)
-/// ---------------------------------------------------------------------
-class ConfirmPinScreen extends StatefulWidget {
-  final String expectedPin;
-  final VoidCallback onBack;
-  final VoidCallback onConfirmed;
-
-  const ConfirmPinScreen({
-    super.key,
-    required this.expectedPin,
-    required this.onBack,
-    required this.onConfirmed,
-  });
-
-  @override
-  State<ConfirmPinScreen> createState() => _ConfirmPinScreenState();
-}
-
-class _ConfirmPinScreenState extends State<ConfirmPinScreen> {
-  static const int _pinLength = 6;
-  static const int _minPinLength = 4;
-  final List<TextEditingController> _controllers = List.generate(
-    _pinLength,
-    (_) => TextEditingController(),
-  );
-  final List<FocusNode> _focusNodes = List.generate(
-    _pinLength,
-    (_) => FocusNode(),
-  );
-  String? _errorText;
-  bool _obscurePin = true;
-  bool _isSubmitting = false;
-
-  String get _pin => _controllers.map((c) => c.text).join();
-  bool get _isValid =>
-      _pin.length >= _minPinLength && _pin.length <= _pinLength;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _focusNodes.first.requestFocus();
-    });
-  }
-
-  @override
-  void dispose() {
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    for (final f in _focusNodes) {
-      f.dispose();
-    }
-    super.dispose();
-  }
-
-  void _onDigitChanged(int index, String value) {
-    setState(() => _errorText = null);
-    if (value.isNotEmpty && index < _pinLength - 1) {
-      _focusNodes[index + 1].requestFocus();
-    }
-    if (value.isEmpty && index > 0) {
-      _focusNodes[index - 1].requestFocus();
-    }
-    setState(() {});
-  }
-
-  void _handleConfirm() async {
-    if (!_isValid || _isSubmitting) return;
-    setState(() {
-      _isSubmitting = true;
-      _errorText = null;
-    });
-    await Future.delayed(const Duration(milliseconds: 400));
-    if (!mounted) return;
-    if (_pin == widget.expectedPin) {
-      setState(() => _isSubmitting = false);
-      widget.onConfirmed();
-    } else {
-      for (final c in _controllers) {
-        c.clear();
-      }
-      _focusNodes.first.requestFocus();
-      setState(() {
-        _isSubmitting = false;
-        _errorText = 'PINs did not match. Please try again.';
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            StepHeader(
-              onBack: widget.onBack,
-              stepLabel: 'Step 2 of 2',
-              title: 'Confirm your PIN',
-              progress: 1.0,
-            ),
-            Expanded(
-              child: _PinEntryBody(
-                title: 'Confirm your PIN',
-                subtitle:
-                    'Re-enter the $_minPinLength–$_pinLength digit PIN you '
-                    'just created to confirm it.',
-                controllers: _controllers,
-                focusNodes: _focusNodes,
-                errorText: _errorText,
-                onChanged: _onDigitChanged,
-                obscureText: _obscurePin,
-                onToggleVisibility: () =>
-                    setState(() => _obscurePin = !_obscurePin),
-                actionLabel: 'Confirm PIN',
-                actionEnabled: _isValid,
-                isBusy: _isSubmitting,
-                onAction: _handleConfirm,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Shared body for the Create PIN / Confirm PIN screens: lock icon, title,
-/// subtitle, up to 6 OTP-style digit boxes (PIN is 4–6 digits), a
-/// show/hide toggle, an explicit action button, and an error line.
-class _PinEntryBody extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final List<TextEditingController> controllers;
-  final List<FocusNode> focusNodes;
-  final String? errorText;
-  final void Function(int index, String value) onChanged;
-  final bool obscureText;
-  final VoidCallback onToggleVisibility;
-  final String actionLabel;
-  final bool actionEnabled;
-  final bool isBusy;
-  final VoidCallback onAction;
-
-  const _PinEntryBody({
-    required this.title,
-    required this.subtitle,
-    required this.controllers,
-    required this.focusNodes,
-    required this.errorText,
-    required this.onChanged,
-    required this.obscureText,
-    required this.onToggleVisibility,
-    required this.actionLabel,
-    required this.actionEnabled,
-    required this.isBusy,
-    required this.onAction,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 32, 24, 16),
-      child: Column(
-        children: [
-          Center(
-            child: Container(
-              width: 84,
-              height: 84,
-              decoration: BoxDecoration(
-                color: AppColors.hotlineBg,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppColors.hotlineBorder),
-              ),
-              child: const Icon(
-                Icons.lock_outline,
-                color: AppColors.primary,
-                size: 34,
-              ),
-            ),
-          ),
-          const SizedBox(height: 22),
-          Center(
-            child: Text(
-              title,
-              style: const TextStyle(
-                fontSize: 21,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textDark,
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Center(
-            child: Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 14,
-                height: 1.4,
-                color: AppColors.textGray,
-              ),
-            ),
-          ),
-          const SizedBox(height: 26),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: List.generate(6, (i) {
-              return _OtpBox(
-                controller: controllers[i],
-                focusNode: focusNodes[i],
-                obscureText: obscureText,
-                onChanged: (v) => onChanged(i, v),
-                onBackspaceEmpty: i > 0
-                    ? () {
-                        controllers[i - 1].clear();
-                        focusNodes[i - 1].requestFocus();
-                      }
-                    : null,
-              );
-            }),
-          ),
-          const SizedBox(height: 12),
-          Center(
-            child: GestureDetector(
-              onTap: onToggleVisibility,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    obscureText
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
-                    size: 16,
-                    color: AppColors.primary,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    obscureText ? 'Show PIN' : 'Hide PIN',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (errorText != null) ...[
-            const SizedBox(height: 8),
-            Center(
-              child: Text(
-                errorText!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: AppColors.errorText,
-                  fontSize: 12.5,
-                ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 22),
-          SizedBox(
-            width: double.infinity,
-            height: 54,
-            child: ElevatedButton(
-              onPressed: isBusy
-                  ? null
-                  : (actionEnabled ? onAction : null),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: actionEnabled && !isBusy
-                    ? AppColors.primaryButton
-                    : AppColors.primaryButtonDisabled,
-                disabledBackgroundColor: AppColors.primaryButtonDisabled,
-                foregroundColor: Colors.white,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              child: isBusy
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : Text(
-                      actionLabel,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// ---------------------------------------------------------------------
-/// RETURNING USER — Enter PIN (post-onboarding login)
-/// ---------------------------------------------------------------------
-/// Shown to a resident who already has an account: a "Welcome back" card
-/// with their initials/name/masked number, 6 PIN boxes filled via the
-/// device's own keyboard (no custom on-screen keypad), and a fallback
-/// link to verify via OTP if the PIN is forgotten.
-/// Returning-user fast path: shows the resident's masked mobile number and
-/// asks for the PIN. Verification runs against the salted hash in [AuthStore]
-/// (this screen never holds the real PIN) with failed-attempt lockout.
-class EnterPinScreen extends StatefulWidget {
-  final AuthStore auth;
-  final VoidCallback? onBack;
-  final VoidCallback onForgotPin;
-  final VoidCallback onUseDifferentNumber;
-  final VoidCallback onVerified;
-
-  /// The full number (+63 …) the resident verified, used for the greeting /
-  /// masked number in demo mode when no real account is stored yet.
-  final String phoneNumber;
-
-const EnterPinScreen({
-      super.key,
-      required this.auth,
-      this.onBack,
-      required this.onForgotPin,
-      required this.onUseDifferentNumber,
-      required this.onVerified,
-      this.phoneNumber = '',
-    });
-
-  @override
-  State<EnterPinScreen> createState() => _EnterPinScreenState();
-}
-
-class _EnterPinScreenState extends State<EnterPinScreen> {
-  static const int _pinLength = 6;
-  static const int _minPinLength = 4;
-  final List<TextEditingController> _controllers = List.generate(
-    _pinLength,
-    (_) => TextEditingController(),
-  );
-  final List<FocusNode> _focusNodes = List.generate(
-    _pinLength,
-    (_) => FocusNode(),
-  );
-
-  String? _errorText;
-  bool _isVerifying = false;
-  bool _obscurePin = true;
-  int _lockedSeconds = 0;
-  Timer? _lockTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _refreshLockout();
-  }
-
-  String get _pin => _controllers.map((c) => c.text).join();
-  bool get _isComplete => _pin.length == _pinLength;
-  bool get _isValid =>
-      _pin.length >= _minPinLength && _pin.length <= _pinLength;
-  bool get _isLocked => _lockedSeconds > 0;
-
-  String get _userName {
-    final name = widget.auth.account?.displayName.trim() ?? '';
-    if (name.isNotEmpty) return name;
-    // Demo login without a stored account — show the demo designation.
-    if (AuthStore.demoMode) return AuthStore.demoName;
-    return 'Kababayan';
-  }
-
-  String get _initials {
-    final trimmed = _userName.trim();
-    if (trimmed.isEmpty) return 'KK';
-    final parts = trimmed.split(RegExp(r'\s+'));
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
-    final word = parts.first;
-    return (word.length >= 2 ? word.substring(0, 2) : word * 2).toUpperCase();
-  }
-
-  String get _maskedNumber {
-    if (widget.auth.hasAccount) return widget.auth.maskedPhone;
-    // Demo: build a masked display from the number the resident entered.
-    final digits = AuthStore.normalizePhone(widget.phoneNumber);
-    if (digits.length < 4) return widget.phoneNumber;
-    return '+63 XXX ${digits.substring(digits.length - 4)}';
-  }
-
-  String get _lockCountdown {
-    final m = _lockedSeconds ~/ 60;
-    final s = _lockedSeconds % 60;
-    return '$m:${s.toString().padLeft(2, '0')}';
-  }
-
-  void _refreshLockout() {
-    final remaining = widget.auth.lockoutSecondsRemaining;
-    if (remaining > 0) {
-      setState(() {
-        _lockedSeconds = remaining;
-        _errorText = 'Too many incorrect attempts. Try again later.';
-      });
-      _startLockCountdown();
-    }
-  }
-
-  void _startLockCountdown() {
-    _lockTimer?.cancel();
-    _lockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      final remaining = widget.auth.lockoutSecondsRemaining;
-      setState(() {
-        _lockedSeconds = remaining;
-        if (remaining <= 0) {
-          _errorText = null;
-        }
-      });
-      if (remaining <= 0) {
-        _lockTimer?.cancel();
-        _focusNodes.first.requestFocus();
-      }
-    });
-  }
-
-  void _clearPinBoxes() {
-    for (final c in _controllers) {
-      c.clear();
-    }
-    _focusNodes.first.requestFocus();
-    setState(() {});
-  }
-
-  void _onDigitChanged(int index, String value) {
-    if (_isLocked) return;
-    setState(() => _errorText = null);
-    if (value.isNotEmpty && index < _pinLength - 1) {
-      _focusNodes[index + 1].requestFocus();
-    }
-    if (value.isEmpty && index > 0) {
-      _focusNodes[index - 1].requestFocus();
-    }
-    setState(() {});
-    if (_isComplete) {
-      _handleVerify();
-    }
-  }
-
-  void _handleVerify() async {
-    if (!_isValid || _isVerifying || _isLocked) return;
-    setState(() {
-      _isVerifying = true;
-      _errorText = null;
-    });
-    final result = await widget.auth.verifyPin(_pin);
-    if (!mounted) return;
-    switch (result.status) {
-      case PinStatus.ok:
-        // Unfocus + settle so the web engine finishes its input connection
-        // before this screen is torn down (avoids the text_editing.dart
-        // "DOM element ... not currently active" assert, flutter#178619).
-        FocusManager.instance.primaryFocus?.unfocus();
-        await Future.delayed(const Duration(milliseconds: 800));
-        if (!mounted) return;
-        widget.onVerified();
-        // Defensive: if the caller forgot onLoginSuccess / onVerified
-        // navigation, don't leave the spinner stuck forever.
-        if (mounted) setState(() => _isVerifying = false);
-        break;
-      case PinStatus.wrong:
-        _clearPinBoxes();
-        setState(() {
-          _isVerifying = false;
-          _errorText = 'Incorrect PIN. '
-              '${result.attemptsLeft} attempt(s) left before lockout.';
-        });
-        break;
-      case PinStatus.locked:
-        _clearPinBoxes();
-        setState(() {
-          _isVerifying = false;
-          _lockedSeconds = result.lockoutSeconds;
-          _errorText = 'Too many incorrect attempts. Try again later.';
-        });
-        _startLockCountdown();
-        break;
-    }
-  }
-
-  @override
-  void dispose() {
-    _lockTimer?.cancel();
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    for (final f in _focusNodes) {
-      f.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // ---- Header + "Welcome back" card (green) ----
-            Container(
-              color: AppColors.primaryDark,
-              padding: const EdgeInsets.fromLTRB(12, 50, 20, 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      if (widget.onBack != null)
-                        InkWell(
-                          onTap: widget.onBack,
-                          borderRadius: BorderRadius.circular(20),
-                          child: const Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: Icon(
-                              Icons.arrow_back,
-                              color: Colors.white,
-                              size: 22,
-                            ),
-                          ),
-                        ),
-                      if (widget.onBack != null) const SizedBox(width: 4),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Log In · Step 4 of 4',
-                              style: TextStyle(
-                                color: AppColors.primaryLight,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.3,
-                              ),
-                            ),
-                            SizedBox(height: 2),
-                            Text(
-                              'Enter your PIN',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 21,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (widget.onBack == null)
-                        const Text(
-                          'Enter your PIN',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 21,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          alignment: Alignment.center,
-                          decoration: const BoxDecoration(
-                            color: AppColors.badgeRed,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Text(
-                            _initials,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Welcome back, $_userName!',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                _maskedNumber,
-                                style: const TextStyle(
-                                  color: AppColors.primaryLight,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // ---- Body: PIN entry ----
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
-                child: Column(
-                  children: [
-                    const Text(
-                      'Welcome back! Enter your 4–6 digit PIN to continue.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        color: AppColors.textGray,
-                      ),
-                    ),
-                    if (widget.auth.isDemoAccount) ...[
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: AppColors.infoBg,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppColors.infoBorder),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(
-                              Icons.auto_awesome,
-                              size: 18,
-                              color: AppColors.primary,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Demo PIN: ${AuthStore.demoPin}',
-                              style: const TextStyle(
-                                fontSize: 13.5,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.primary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 26),
-                    IgnorePointer(
-                      ignoring: _isLocked || _isVerifying,
-                      child: Opacity(
-                        opacity: _isLocked ? 0.45 : 1.0,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: List.generate(_pinLength, (i) {
-                            return _OtpBox(
-                              controller: _controllers[i],
-                              focusNode: _focusNodes[i],
-                              obscureText: _obscurePin,
-                              onChanged: (v) => _onDigitChanged(i, v),
-                              onBackspaceEmpty: i > 0
-                                  ? () {
-                                      _controllers[i - 1].clear();
-                                      _focusNodes[i - 1].requestFocus();
-                                      setState(() {});
-                                    }
-                                  : null,
-                            );
-                          }),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    GestureDetector(
-                      onTap: _isLocked || _isVerifying
-                          ? null
-                          : () => setState(
-                                () => _obscurePin = !_obscurePin,
-                              ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            _obscurePin
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                            size: 16,
-                            color: AppColors.primary,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _obscurePin ? 'Show PIN' : 'Hide PIN',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.primary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (_errorText != null) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        _errorText!,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: AppColors.errorText,
-                          fontSize: 12.5,
-                        ),
-                      ),
-                    ],
-                    if (_isLocked) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        'Try again in $_lockCountdown',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textDark,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 22),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 54,
-                      child: ElevatedButton(
-                        onPressed: _isVerifying || _isLocked
-                            ? null
-                            : (_isValid ? _handleVerify : null),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _isValid && !_isVerifying
-                              ? AppColors.primaryButton
-                              : AppColors.primaryButtonDisabled,
-                          disabledBackgroundColor:
-                              AppColors.primaryButtonDisabled,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        child: _isVerifying
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Text(
-                                'Log In',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    GestureDetector(
-                      onTap: _isVerifying || _isLocked
-                          ? null
-                          : widget.onForgotPin,
-                      child: Text(
-                        'Forgot PIN? Verify via OTP',
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w700,
-                          color: _isLocked
-                              ? AppColors.hint
-                              : AppColors.hotlineRed,
-                          decoration: TextDecoration.underline,
-                          decorationColor: _isLocked
-                              ? AppColors.hint
-                              : AppColors.hotlineRed,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    GestureDetector(
-                      onTap: _isVerifying ? null : widget.onUseDifferentNumber,
-                      child: const Text(
-                        'Not you? Use a different number',
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.primary,
-                          decoration: TextDecoration.underline,
-                          decorationColor: AppColors.primary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// ---------------------------------------------------------------------
-/// Device Verification — existing account, new/unregistered device
-/// ---------------------------------------------------------------------
-/// Shown when OTP succeeds for a number that already has an account but
-/// this device is not trusted yet. The resident explicitly registers the
-/// device before PIN login is allowed (banking-app style).
-class TrustDeviceScreen extends StatefulWidget {
-  final String phoneNumber;
-  final Future<void> Function() onRegister;
-  final VoidCallback onUseDifferentNumber;
-
-  const TrustDeviceScreen({
-    super.key,
-    required this.phoneNumber,
-    required this.onRegister,
-    required this.onUseDifferentNumber,
-  });
-
-  @override
-  State<TrustDeviceScreen> createState() => _TrustDeviceScreenState();
-}
-
-class _TrustDeviceScreenState extends State<TrustDeviceScreen> {
-  bool _isRegistering = false;
-  String _deviceId = '';
-
-  @override
-  void initState() {
-    super.initState();
-    AuthStore.load().then((auth) async {
-      final id = await auth.deviceId();
-      if (mounted) setState(() => _deviceId = id);
-    });
-  }
-
-  String get _maskedNumber {
-    final digits =
-        AuthStore.normalizePhone(widget.phoneNumber);
-    if (digits.length < 4) return widget.phoneNumber;
-    return '+63 XXX ${digits.substring(digits.length - 4)}';
-  }
-
-  String get _shortDeviceId =>
-      _deviceId.length <= 8 ? _deviceId : _deviceId.substring(0, 8);
-
-  Future<void> _handleRegister() async {
-    if (_isRegistering) return;
-    setState(() => _isRegistering = true);
-    await widget.onRegister();
-    if (mounted) setState(() => _isRegistering = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              color: AppColors.primaryDark,
-              padding: const EdgeInsets.fromLTRB(20, 56, 20, 28),
-              child: const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'New device detected',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'This account is already registered. Verify this device '
-                    'to continue.',
-                    style: TextStyle(
-                      color: AppColors.primaryLight,
-                      fontSize: 13.5,
-                      height: 1.4,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(18),
-                      decoration: BoxDecoration(
-                        color: AppColors.card,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: AppColors.border),
-                      ),
-                      child: Column(
-                        children: [
-                          Container(
-                            width: 64,
-                            height: 64,
-                            decoration: BoxDecoration(
-                              color: AppColors.infoBg,
-                              borderRadius: BorderRadius.circular(18),
-                              border:
-                                  Border.all(color: AppColors.infoBorder),
-                            ),
-                            child: const Icon(
-                              Icons.phonelink_lock_outlined,
-                              color: AppColors.primary,
-                              size: 30,
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          Text(
-                            _maskedNumber,
-                            style: const TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.textDark,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _deviceId.isEmpty
-                                ? 'Identifying this device…'
-                                : 'Device ID: $_shortDeviceId',
-                            style: const TextStyle(
-                              fontSize: 12.5,
-                              color: AppColors.textGray,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Only register devices you own. If you did not request '
-                      'this, choose a different number.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        height: 1.4,
-                        color: AppColors.textGray,
-                      ),
-                    ),
-                    const SizedBox(height: 22),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 54,
-                      child: ElevatedButton(
-                        onPressed:
-                            _isRegistering ? null : _handleRegister,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primaryButton,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        child: _isRegistering
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Text(
-                                'Register this device',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Center(
-                      child: GestureDetector(
-                        onTap: _isRegistering
-                            ? null
-                            : widget.onUseDifferentNumber,
-                        child: const Text(
-                          'Use a different number',
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.primary,
-                            decoration: TextDecoration.underline,
-                            decorationColor: AppColors.primary,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// ---------------------------------------------------------------------
-/// LOG IN — Step 3 of 4: Enter verification/access Code
-/// ---------------------------------------------------------------------
-/// Shown after OTP verification in the Log In flow. The resident enters
-/// the barangay-issued verification code; only a valid code unlocks the
-/// Enter PIN step. The number shown is preserved from the earlier screens.
-class EnterAccessCodeScreen extends StatefulWidget {
-  final String phoneNumber;
-  final VoidCallback onBack;
-  final VoidCallback onVerified;
-
-  const EnterAccessCodeScreen({
-    super.key,
-    required this.phoneNumber,
-    required this.onBack,
-    required this.onVerified,
-  });
-
-  @override
-  State<EnterAccessCodeScreen> createState() => _EnterAccessCodeScreenState();
-}
-
-class _EnterAccessCodeScreenState extends State<EnterAccessCodeScreen> {
-  static const int _codeLength = 6;
-
-  final List<TextEditingController> _controllers = List.generate(
-    _codeLength,
-    (_) => TextEditingController(),
-  );
-  final List<FocusNode> _focusNodes = List.generate(
-    _codeLength,
-    (_) => FocusNode(),
-  );
-
-  bool _isVerifying = false;
-  bool _obscureCode = true;
-  String? _errorText;
-
-  String get _code => _controllers.map((c) => c.text).join();
-  bool get _isComplete => _code.length == _codeLength;
-
-  @override
-  void dispose() {
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    for (final f in _focusNodes) {
-      f.dispose();
-    }
-    super.dispose();
-  }
-
-  void _onDigitChanged(int index, String value) {
-    if (value.isNotEmpty && index < _codeLength - 1) {
-      _focusNodes[index + 1].requestFocus();
-    }
-    if (value.isEmpty && index > 0) {
-      _focusNodes[index - 1].requestFocus();
-    }
-    setState(() => _errorText = null);
-    if (_isComplete) {
-      _handleVerify();
-    }
-  }
-
-  void _clearCode() {
-    for (final c in _controllers) {
-      c.clear();
-    }
-    _focusNodes.first.requestFocus();
-    setState(() {});
-  }
-
-  /// Validates the access code. Demo backend: any 6-digit code is accepted
-  /// except "000000", which surfaces the incorrect-code error path.
-  /// Replace the simulated call below with the real verification API.
-  void _handleVerify() async {
-    if (!_isComplete || _isVerifying) return;
-    setState(() {
-      _isVerifying = true;
-      _errorText = null;
-    });
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted) return;
-    if (_code == '000000') {
-      setState(() {
-        _isVerifying = false;
-        _errorText = 'Incorrect code. Please check and try again.';
-      });
-      _clearCode();
-      return;
-    }
-    setState(() => _isVerifying = false);
-    // Release focus before the screen is replaced so the web engine can't
-    // race a pending geometry update against a torn-down input element.
-    FocusManager.instance.primaryFocus?.unfocus();
-    widget.onVerified();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            StepHeader(
-              onBack: widget.onBack,
-              stepLabel: 'Log In · Step 3 of 4',
-              title: 'Enter Code',
-              progress: 0.75,
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Enter your verification code',
-                      style: TextStyle(
-                        fontSize: 21,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    RichText(
-                      text: TextSpan(
-                        style: const TextStyle(
-                          fontSize: 14,
-                          height: 1.4,
-                          color: AppColors.textGray,
-                        ),
-                        children: [
-                          const TextSpan(
-                            text: 'Enter the access code issued for ',
-                          ),
-                          TextSpan(
-                            text: widget.phoneNumber.isEmpty
-                                ? '+63 9XX XXX XXXX'
-                                : widget.phoneNumber,
-                            style: const TextStyle(
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const TextSpan(text: '.'),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 26),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: List.generate(_codeLength, (i) {
-                        return _OtpBox(
-                          controller: _controllers[i],
-                          focusNode: _focusNodes[i],
-                          obscureText: _obscureCode,
-                          onChanged: (v) => _onDigitChanged(i, v),
-                          onBackspaceEmpty: i > 0
-                              ? () {
-                                  _controllers[i - 1].clear();
-                                  _focusNodes[i - 1].requestFocus();
-                                  setState(() {});
-                                }
-                              : null,
-                        );
-                      }),
-                    ),
-                    const SizedBox(height: 12),
-                    Center(
-                      child: GestureDetector(
-                        onTap: () =>
-                            setState(() => _obscureCode = !_obscureCode),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _obscureCode
-                                  ? Icons.visibility_outlined
-                                  : Icons.visibility_off_outlined,
-                              size: 16,
-                              color: AppColors.primary,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              _obscureCode ? 'Show code' : 'Hide code',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.primary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    if (_errorText != null) ...[
-                      const SizedBox(height: 8),
-                      Center(
-                        child: Text(
-                          _errorText!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: AppColors.errorText,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                      ),
-                    ],
-                    if (AuthStore.demoMode) ...[
-                      const SizedBox(height: 14),
-                      Center(
-                        child: Text(
-                          'Demo: enter any 6-digit code (e.g. 654321)',
-                          style: const TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 20),
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AppColors.infoBg,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.infoBorder),
-                      ),
-                      child: const Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            Icons.info_outline,
-                            size: 16,
-                            color: AppColors.textGray,
-                          ),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'This code confirms your identity together '
-                              'with the OTP. Contact your barangay hall if '
-                              'you lost your code.',
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                height: 1.4,
-                                color: AppColors.textGray,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 22),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 54,
-                      child: ElevatedButton(
-                        onPressed: _isVerifying
-                            ? null
-                            : (_isComplete ? _handleVerify : null),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _isComplete && !_isVerifying
-                              ? AppColors.primaryButton
-                              : AppColors.primaryButtonDisabled,
-                          disabledBackgroundColor:
-                              AppColors.primaryButtonDisabled,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        child: _isVerifying
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Text(
-                                'Verify Code',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

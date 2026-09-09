@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'supabase_config.dart';
 import 'auth_store.dart';
 import 'login.dart';
 import 'home.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Supabase.initialize(
+    url: SupabaseConfig.url,
+    publishableKey: SupabaseConfig.anonKey,
+  );
   runApp(const SCSSApp());
 }
 
@@ -28,8 +35,8 @@ class SCSSApp extends StatelessWidget {
 }
 
 /// App-launch router: the landing page (Log In / Create Account) is always
-/// the entry point. Returning residents get a PIN shortcut on the landing
-/// page itself.
+/// the entry point. Returning residents on a trusted device can log back in
+/// from here by verifying their email.
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
 

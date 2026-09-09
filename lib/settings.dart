@@ -23,7 +23,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _lowSeverityAlerts = false;
 
   String _fullName = 'Kababayan';
-  String _maskedPhone = '+63 XXX XXXX';
+  String _accountEmail = '';
+  String _maskedEmail = '';
+  String _accountPhone = '';
 
   @override
   void initState() {
@@ -35,7 +37,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (account != null && account.displayName.isNotEmpty) {
           _fullName = account.displayName;
         }
-        _maskedPhone = auth.maskedPhone;
+        if (account != null && account.email.isNotEmpty) {
+          _accountEmail = account.email;
+        }
+        if (account != null && account.phoneNumber.isNotEmpty) {
+          _accountPhone = account.phoneNumber;
+        }
+        _maskedEmail = auth.maskedEmail;
       });
     });
   }
@@ -96,7 +104,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Log out?'),
         content: const Text(
-          'You will need to verify your PIN or OTP to log back in.',
+          'You will need to verify your email code to log back in.',
         ),
         actions: [
           TextButton(
@@ -112,14 +120,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (confirmed == true && mounted) {
-      // Trust is kept, so next launch (or this navigation) goes straight
-      // to PIN login — "Returning resident = PIN first".
-      // NOTE: onLoginSuccess is required — without it the PIN screen
-      // verifies but never leaves (stuck on the loading spinner).
+      // Clear the cached profile and trusted-device state.
+      final auth = await AuthStore.load();
+      await auth.eraseAll();
+      if (!mounted) return;
+      // Trust is kept, so the returning resident logs back in through the
+      // landing page — the same path as a fresh app launch.
+      // NOTE: onLoginSuccess is required — without it the login flow
+      // never leaves (stuck on the loading spinner).
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
           builder: (loginCtx) => LoginFlow(
-            initialStep: LoginStep.pinLogin,
+            initialStep: LoginStep.landing,
             onLoginSuccess: () {
               Navigator.of(loginCtx).pushAndRemoveUntil(
                 MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -139,8 +151,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Remove this device?'),
         content: const Text(
-          'This device will be unregistered. You will need to verify via '
-          'OTP and register the device again to log back in.',
+          'This device will be unregistered. You will need to '
+          'log back in with your email and password.',
         ),
         actions: [
           TextButton(
@@ -162,7 +174,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
             builder: (loginCtx) => LoginFlow(
-              initialStep: LoginStep.mobileNumber,
+              initialStep: LoginStep.landing,
               onLoginSuccess: () {
                 Navigator.of(loginCtx).pushAndRemoveUntil(
                   MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -264,7 +276,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   ),
                                   const SizedBox(width: 6),
                                   Text(
-                                    _maskedPhone,
+                                    _maskedEmail,
                                     style: const TextStyle(
                                       color: AppColors.primaryLight,
                                       fontSize: 13,
@@ -337,7 +349,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _SettingsRowCard(
                     icon: Icons.chat_bubble_outline,
                     title: 'Email',
-                    subtitle: 'Not provided',
+                    subtitle: _accountEmail.isEmpty
+                        ? 'Not provided'
+                        : _accountEmail,
                     onTap: () => _showComingSoon('Email'),
                   ),
 
@@ -400,6 +414,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 10),
                   _SettingsGroupCard(
                     children: [
+                      if (_accountPhone.isNotEmpty)
+                        _InfoRow(
+                          icon: Icons.phone_outlined,
+                          title: 'Registered number',
+                          subtitle: _accountPhone,
+                          trailing: const Icon(
+                            Icons.verified_outlined,
+                            size: 18,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      if (_accountPhone.isNotEmpty) const _RowDivider(),
                       _InfoRow(
                         icon: Icons.wifi,
                         title: 'All data synced',
@@ -439,7 +465,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _SettingsRowCard(
                     icon: Icons.shield_outlined,
                     title: 'Security & Verification',
-                    subtitle: 'Phone verified · OTP enabled',
+                    subtitle: 'Email verified · Code enabled',
                     onTap: () => _showComingSoon('Security & Verification'),
                   ),
                   const SizedBox(height: 10),
