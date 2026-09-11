@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'supabase_config.dart';
-import 'auth_store.dart';
-import 'login.dart';
-import 'home.dart';
+import 'backend/supabase_config.dart';
+import 'backend/auth_store.dart';
+import 'frontend/login.dart';
+import 'frontend/home.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

@@ -27,7 +27,8 @@ class ReportItem {
   final IconData icon;
   final Color iconBg;
   final Color iconColor;
-  final String title;
+  final String category; // e.g. 'Fire & Emergency'
+  final String subtype; // e.g. 'Smoke / Burning Complaint'
   final String location;
   final String refId;
   final ReportStatus status;
@@ -44,7 +45,8 @@ class ReportItem {
     required this.icon,
     required this.iconBg,
     required this.iconColor,
-    required this.title,
+    required this.category,
+    required this.subtype,
     required this.location,
     required this.refId,
     required this.status,
@@ -66,7 +68,8 @@ final List<ReportItem> _sampleReports = [
     icon: Icons.local_fire_department,
     iconBg: AppColors.iconCircleFire,
     iconColor: AppColors.hotlineRed,
-    title: 'Fire / Smoke',
+    category: 'Fire & Emergency',
+    subtype: 'Smoke / Burning Complaint',
     location: 'Brgy. Tandang Sora, Quezon City',
     refId: 'INC-2025-06-00123',
     status: ReportStatus.inProgress,
@@ -98,7 +101,8 @@ final List<ReportItem> _sampleReports = [
     icon: Icons.volume_up_outlined,
     iconBg: AppColors.iconCircleNoise,
     iconColor: AppColors.statusResolvedText,
-    title: 'Noise Disturbance',
+    category: 'Community Disputes',
+    subtype: 'Noise Complaint',
     location: 'Brgy. Tandang Sora, Quezon City',
     refId: 'INC-2025-05-00087',
     status: ReportStatus.resolved,
@@ -135,7 +139,8 @@ final List<ReportItem> _sampleReports = [
     icon: Icons.directions_car_outlined,
     iconBg: AppColors.iconCircleRoad,
     iconColor: AppColors.ratingStar,
-    title: 'Road Obstruction',
+    category: 'Traffic & Road',
+    subtype: 'Road Obstruction',
     location: 'Brgy. Tandang Sora, Quezon City',
     refId: 'INC-2025-05-00044',
     status: ReportStatus.closed,
@@ -414,15 +419,29 @@ class _ReportCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          child: Text(
-                            report.title,
-                            style: const TextStyle(
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textDark,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                report.subtype,
+                                style: const TextStyle(
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textDark,
+                                ),
+                              ),
+                              const SizedBox(height: 1),
+                              Text(
+                                report.category,
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  color: AppColors.textGray,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         Container(
@@ -804,11 +823,19 @@ class _InfoCard extends StatelessWidget {
                   children: [
                     const SizedBox(height: 6),
                     Text(
-                      report.title,
+                      report.subtype,
                       style: const TextStyle(
                         fontSize: 15.5,
                         fontWeight: FontWeight.w700,
                         color: AppColors.textDark,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      report.category,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: AppColors.textGray,
                       ),
                     ),
                     const SizedBox(height: 6),

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:resident_app/login.dart';
+import 'package:resident_app/frontend/login.dart';
 
 void main() {
   testWidgets('registration flow skips OTP and reaches the profile form', (

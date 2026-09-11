@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'auth_store.dart';
+import '../backend/auth_store.dart';
 import 'login.dart' show AppColors, LoginFlow, LoginStep;
 import 'bottom_nav.dart';
 import 'home.dart';
