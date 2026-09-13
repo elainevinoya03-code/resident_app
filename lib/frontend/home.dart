@@ -5,6 +5,9 @@ import 'my_report.dart';
 import 'notification.dart';
 import 'report.dart';
 import 'settings.dart';
+import '../backend/auth_store.dart';
+import '../backend/home_service.dart';
+import '../backend/report_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,6 +18,66 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _navIndex = 0;
+
+  /// Dashboard data loaded from SQL (via [HomeService]).
+  HomeDashboard? _dashboard;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDashboard();
+  }
+
+  Future<void> _loadDashboard() async {
+    try {
+      final auth = await AuthStore.load();
+      final profile = auth.account;
+      final dashboard = await HomeService.loadDashboard(
+        residentName: profile?.firstName ?? '',
+        userEmail: profile?.email ?? '',
+      );
+      if (!mounted) return;
+      setState(() => _dashboard = dashboard);
+    } catch (_) {
+      // Keep previous data (or empty placeholders) on failure.
+    }
+  }
+
+  /// Greeting label — the resident's first name, 'Resident' as fallback.
+  String get _greetingName {
+    final name = (_dashboard?.residentName ?? '').trim();
+    return name.isEmpty ? 'Resident' : name;
+  }
+
+  /// Hotlines from the DB, or the reference list when SQL is unreachable.
+  List<Hotline> get _hotlines {
+    final list = _dashboard?.hotlines ?? const <Hotline>[];
+    return list.isEmpty ? _defaultHotlines : list;
+  }
+
+  /// "Track My Reports" summary line.
+  String get _reportSummaryText {
+    final summary = _dashboard?.reports;
+    if (summary == null || summary.total == 0) return 'No reports yet';
+    final total =
+        summary.total == 1 ? '1 report' : '${summary.total} reports';
+    final progress = summary.inProgress == 1
+        ? '1 in progress'
+        : '${summary.inProgress} in progress';
+    return '$total · $progress';
+  }
+
+  /// The most recent report rows shown under "RECENT REPORTS".
+  List<ReportRecord> get _recentReports =>
+      _dashboard?.reports.recent ?? const <ReportRecord>[];
+
+  /// Fallback hotlines used when the `hotlines` table is empty/unreachable.
+  static final List<Hotline> _defaultHotlines = const [
+    Hotline(id: 'bfp', label: 'BFP', number: '911', sortOrder: 1),
+    Hotline(id: 'pnp', label: 'PNP', number: '911', sortOrder: 2),
+    Hotline(id: 'tsemsd', label: 'TSEMSD', number: '8922-7000', sortOrder: 3),
+    Hotline(id: 'ndrrmo', label: 'NDRRMO', number: '911', sortOrder: 4),
+  ];
 
   void _onNavTap(int index) {
     if (index == 1) {
@@ -79,21 +142,21 @@ class _HomeScreenState extends State<HomeScreen> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
+                            const Text(
                               'Good morning',
                               style: TextStyle(
                                 color: Colors.white70,
                                 fontSize: 13,
                               ),
                             ),
-                            SizedBox(height: 4),
+                            const SizedBox(height: 4),
                             Text(
-                              'Resident',
-                              style: TextStyle(
+                              _greetingName,
+                              style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 22,
                                 fontWeight: FontWeight.bold,
@@ -129,23 +192,25 @@ class _HomeScreenState extends State<HomeScreen> {
                             Positioned(
                               right: -2,
                               top: -2,
-                              child: Container(
-                                width: 18,
-                                height: 18,
-                                alignment: Alignment.center,
-                                decoration: const BoxDecoration(
-                                  color: AppColors.badgeRed,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Text(
-                                  '2',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 10.5,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
+                              child: (_dashboard?.unreadAlerts ?? 0) > 0
+                                  ? Container(
+                                      width: 18,
+                                      height: 18,
+                                      alignment: Alignment.center,
+                                      decoration: const BoxDecoration(
+                                        color: AppColors.badgeRed,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Text(
+                                        '${_dashboard?.unreadAlerts ?? 0}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    )
+                                  : const SizedBox.shrink(),
                             ),
                           ],
                         ),
@@ -174,28 +239,17 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(height: 12),
                         Row(
-                          children: const [
-                            Expanded(
-                              child: _HotlinePill(label: 'BFP', number: '000'),
-                            ),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: _HotlinePill(label: 'PNP', number: '000'),
-                            ),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: _HotlinePill(
-                                label: 'TSEMSD',
-                                number: '000',
+                          children: [
+                            for (var i = 0; i < _hotlines.length; i++) ...[
+                              Expanded(
+                                child: _HotlinePill(
+                                  label: _hotlines[i].label,
+                                  number: _hotlines[i].number,
+                                ),
                               ),
-                            ),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: _HotlinePill(
-                                label: 'NDRRMO',
-                                number: '0000',
-                              ),
-                            ),
+                              if (i < _hotlines.length - 1)
+                                const SizedBox(width: 8),
+                            ],
                           ],
                         ),
                       ],
@@ -253,7 +307,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     iconColor: AppColors.primary,
                     title: 'Track My Reports',
                     titleColor: AppColors.textDark,
-                    subtitle: '3 reports · 1 in progress',
+                    subtitle: _reportSummaryText,
                     subtitleColor: AppColors.textGray,
                     chevronColor: AppColors.textGray,
                     onTap: () {
@@ -275,27 +329,24 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  _ReportTile(
-                    iconBg: AppColors.iconCircleFire,
-                    icon: Icons.local_fire_department,
-                    iconColor: AppColors.hotlineRed,
-                    title: 'Fire / Smoke',
-                    refId: 'INC-2025-06-00123',
-                    statusLabel: 'In Progress',
-                    statusBg: AppColors.statusInProgressBg,
-                    statusText: AppColors.statusInProgressText,
-                  ),
-                  const SizedBox(height: 12),
-                  _ReportTile(
-                    iconBg: AppColors.iconCircleNoise,
-                    icon: Icons.volume_up_outlined,
-                    iconColor: AppColors.statusResolvedText,
-                    title: 'Noise Disturbance',
-                    refId: 'INC-2025-05-00087',
-                    statusLabel: 'Resolved',
-                    statusBg: AppColors.statusResolvedBg,
-                    statusText: AppColors.statusResolvedText,
-                  ),
+                  if (_recentReports.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Text(
+                          'No reports submitted yet.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppColors.textGray.withOpacity(0.9),
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    for (final record in _recentReports) ...[
+                      _RecentReportTile(record: record),
+                      const SizedBox(height: 12),
+                    ],
                 ],
               ),
             ),
@@ -331,21 +382,29 @@ class _HotlinePill extends StatelessWidget {
         ),
         child: Column(
           children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                color: Colors.white.withOpacity(0.55),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                label,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withOpacity(0.55),
+                ),
               ),
             ),
             const SizedBox(height: 4),
-            Text(
-              number,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                number,
+                maxLines: 1,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
               ),
             ),
           ],
@@ -504,29 +563,21 @@ class _ActionCard extends StatelessWidget {
   }
 }
 
-class _ReportTile extends StatelessWidget {
-  final Color iconBg;
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String refId;
-  final String statusLabel;
-  final Color statusBg;
-  final Color statusText;
+class _RecentReportTile extends StatelessWidget {
+  final ReportRecord record;
 
-  const _ReportTile({
-    required this.iconBg,
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.refId,
-    required this.statusLabel,
-    required this.statusBg,
-    required this.statusText,
-  });
+  const _RecentReportTile({required this.record});
 
   @override
   Widget build(BuildContext context) {
+    final visual = _categoryVisual(record.category);
+    final status = _statusStyle(record.status);
+    final title = record.category.trim().isNotEmpty
+        ? record.category.trim()
+        : (record.isEmergency ? 'Emergency' : (record.subtype.trim().isNotEmpty
+            ? record.subtype.trim()
+            : 'Report'));
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -538,8 +589,11 @@ class _ReportTile extends StatelessWidget {
           Container(
             width: 42,
             height: 42,
-            decoration: BoxDecoration(color: iconBg, shape: BoxShape.circle),
-            child: Icon(icon, color: iconColor, size: 20),
+            decoration: BoxDecoration(
+              color: visual.bg,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(visual.icon, color: visual.color, size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -556,7 +610,7 @@ class _ReportTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  refId,
+                  record.trackingId,
                   style: TextStyle(fontSize: 12, color: AppColors.textGray),
                 ),
               ],
@@ -565,20 +619,98 @@ class _ReportTile extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
-              color: statusBg,
+              color: status.bg,
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
-              statusLabel,
+              status.label,
               style: TextStyle(
                 fontSize: 11.5,
                 fontWeight: FontWeight.w600,
-                color: statusText,
+                color: status.text,
               ),
             ),
           ),
         ],
       ),
     );
+  }
+}
+
+({IconData icon, Color bg, Color color}) _categoryVisual(String category) {
+  switch (category.toLowerCase()) {
+    case 'fire & emergency':
+    case 'fire':
+    case 'emergency':
+      return (
+        icon: Icons.local_fire_department,
+        bg: AppColors.iconCircleFire,
+        color: AppColors.hotlineRed,
+      );
+    case 'noise':
+    case 'noise disturbance':
+    case 'community disputes':
+      return (
+        icon: Icons.volume_up_outlined,
+        bg: AppColors.iconCircleNoise,
+        color: AppColors.statusResolvedText,
+      );
+    case 'traffic & road':
+    case 'traffic':
+    case 'road':
+      return (
+        icon: Icons.directions_car_outlined,
+        bg: AppColors.iconCircleRoad,
+        color: AppColors.ratingStar,
+      );
+    case 'crime & property':
+    case 'crime':
+      return (
+        icon: Icons.lock_outline,
+        bg: AppColors.iconCircleDoc,
+        color: AppColors.primary,
+      );
+    case 'environmental & sanitation':
+    case 'environmental':
+      return (
+        icon: Icons.eco_outlined,
+        bg: AppColors.iconCircleDoc,
+        color: AppColors.primary,
+      );
+    case 'animal-related':
+      return (
+        icon: Icons.pets_outlined,
+        bg: AppColors.iconCircleDoc,
+        color: AppColors.primary,
+      );
+    default:
+      return (
+        icon: Icons.description_outlined,
+        bg: AppColors.iconCircleDoc,
+        color: AppColors.primary,
+      );
+  }
+}
+
+({String label, Color bg, Color text}) _statusStyle(String status) {
+  switch (status.trim().toLowerCase()) {
+    case 'resolved':
+      return (
+        label: 'Resolved',
+        bg: AppColors.statusResolvedBg,
+        text: AppColors.statusResolvedText,
+      );
+    case 'closed':
+      return (
+        label: 'Closed',
+        bg: AppColors.statusClosedBg,
+        text: AppColors.statusClosedText,
+      );
+    default:
+      return (
+        label: 'In Progress',
+        bg: AppColors.statusInProgressBg,
+        text: AppColors.statusInProgressText,
+      );
   }
 }
