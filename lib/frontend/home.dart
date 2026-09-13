@@ -92,7 +92,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             SizedBox(height: 4),
                             Text(
-                              'Hello World',
+                              'Resident',
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 22,
@@ -210,14 +210,28 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
                 children: [
+                  // ── Prominent Emergency / SOS button ──
+                  _EmergencyCard(
+                    onTap: () {
+                      Navigator.of(context).push(
+                        PageRouteBuilder(
+                          transitionDuration: Duration.zero,
+                          reverseTransitionDuration: Duration.zero,
+                          pageBuilder: (_, __, ___) =>
+                              const EmergencyReportFlow(),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 14),
                   _ActionCard(
                     color: AppColors.reportCardGreen,
                     iconBg: Colors.white.withOpacity(0.15),
                     icon: Icons.local_fire_department,
                     iconColor: Colors.white,
-                    title: 'Report an Incident',
+                    title: 'report an incident',
                     titleColor: Colors.white,
-                    subtitle: 'Sunog · Krimen · Baha · Medikal · At iba pa',
+                    subtitle: 'property · community · noise · road · animal · environment',
                     subtitleColor: Colors.white70,
                     chevronColor: Colors.white70,
                     onTap: () {
@@ -341,6 +355,79 @@ class _HotlinePill extends StatelessWidget {
   }
 }
 
+class _EmergencyCard extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _EmergencyCard({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFFDC2626),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Text(
+                    'SOS',
+                    style: TextStyle(
+                      color: Color(0xFFDC2626),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'emergency',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'fire · flood · medical · crime',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right,
+                color: Colors.white70,
+                size: 24,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ActionCard extends StatelessWidget {
   final Color color;
   final Color iconBg;
@@ -370,9 +457,9 @@ class _ActionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: color,
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: BorderRadius.circular(16),
       child: InkWell(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(18),
@@ -408,7 +495,7 @@ class _ActionCard extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right, color: chevronColor),
+              Icon(Icons.chevron_right, color: chevronColor, size: 24),
             ],
           ),
         ),

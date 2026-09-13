@@ -5,6 +5,8 @@ import 'home.dart';
 import 'notification.dart';
 import 'report.dart';
 import 'settings.dart';
+import '../backend/auth_store.dart';
+import '../backend/report_service.dart';
 
 enum ReportStatus { inProgress, resolved, closed }
 
@@ -62,122 +64,172 @@ class ReportItem {
        responderPhone = responderPhone ?? '';
 }
 
-// Sample front-end data matching the reference design.
-final List<ReportItem> _sampleReports = [
-  ReportItem(
-    icon: Icons.local_fire_department,
-    iconBg: AppColors.iconCircleFire,
-    iconColor: AppColors.hotlineRed,
-    category: 'Fire & Emergency',
-    subtype: 'Smoke / Burning Complaint',
-    location: 'Brgy. Tandang Sora, Quezon City',
-    refId: 'INC-2025-06-00123',
-    status: ReportStatus.inProgress,
-    dateTime: 'Jun 12, 2025 · 8:14 AM',
-    description:
-        'Smoke visible from an abandoned building near the basketball court on Tandang Sora Avenue.',
-    responderName: 'SPO1 Juan dela Cruz',
-    responderPhone: '0917-555-1234',
-    updates: const [
-      StatusUpdate(
-        title: 'New',
-        date: 'Jun 12 · 8:14 AM',
-        description: 'Report received and logged by the system.',
-      ),
-      StatusUpdate(
-        title: 'Acknowledged',
-        date: 'Jun 12 · 8:22 AM',
-        description: 'BFP Tandang Sora Station assigned to respond.',
-      ),
-      StatusUpdate(
-        title: 'In Progress',
-        date: 'Jun 12 · 8:45 AM',
-        description:
-            'Fire truck dispatched. Smoke contained — no structural damage.',
-      ),
-    ],
-  ),
-  ReportItem(
-    icon: Icons.volume_up_outlined,
-    iconBg: AppColors.iconCircleNoise,
-    iconColor: AppColors.statusResolvedText,
-    category: 'Community Disputes',
-    subtype: 'Noise Complaint',
-    location: 'Brgy. Tandang Sora, Quezon City',
-    refId: 'INC-2025-05-00087',
-    status: ReportStatus.resolved,
-    showRating: true,
-    dateTime: 'May 28, 2025 · 11:03 PM',
-    description:
-        'Loud videoke and music until 2 AM every Friday night near Visayas Avenue. Multiple households affected for three weeks.',
-    responderName: 'Bgy. Tanod Jose Santos',
-    responderPhone: '0912-888-5678',
-    updates: const [
-      StatusUpdate(
-        title: 'New',
-        date: 'May 28 · 11:03 PM',
-        description: 'Report received.',
-      ),
-      StatusUpdate(
-        title: 'Acknowledged',
-        date: 'May 28 · 11:15 PM',
-        description: 'Barangay tanod notified and dispatched.',
-      ),
-      StatusUpdate(
-        title: 'In Progress',
-        date: 'May 28 · 11:40 PM',
-        description: 'Tanod visited site. Spoken to property owner.',
-      ),
-      StatusUpdate(
-        title: 'Resolved',
-        date: 'May 29 · 12:05 AM',
-        description: 'Noise stopped. Owner complied with ordinance.',
-      ),
-    ],
-  ),
-  ReportItem(
-    icon: Icons.directions_car_outlined,
-    iconBg: AppColors.iconCircleRoad,
-    iconColor: AppColors.ratingStar,
-    category: 'Traffic & Road',
-    subtype: 'Road Obstruction',
-    location: 'Brgy. Tandang Sora, Quezon City',
-    refId: 'INC-2025-05-00044',
-    status: ReportStatus.closed,
-    dateTime: 'May 15, 2025 · 6:32 AM',
-    description:
-        'Fallen tree blocking the northbound lane of Tandang Sora Ave. near Congressional Avenue.',
-    responderName: 'DPWH-NCR Crew 3',
+/// Maps a backend [ReportRecord] onto the UI's [ReportItem] model.
+ReportItem _reportFromRecord(ReportRecord record) {
+  final category = record.isEmergency && record.category.trim().isEmpty
+      ? 'Fire & Emergency'
+      : (record.category.trim().isEmpty ? 'Other' : record.category.trim());
+  final visual = _categoryVisual(category);
+  final status = _statusFrom(record.status);
+
+  return ReportItem(
+    icon: visual.icon,
+    iconBg: visual.bg,
+    iconColor: visual.color,
+    category: category,
+    subtype: record.subtype.trim().isEmpty
+        ? 'General report'
+        : record.subtype.trim(),
+    location: record.place.trim().isEmpty
+        ? _coordsText(record)
+        : record.place.trim(),
+    refId: record.trackingId,
+    status: status,
+    showRating: status == ReportStatus.resolved,
+    dateTime: _displayDateTime(
+      record.reportDateTime.isNotEmpty
+          ? record.reportDateTime
+          : record.createdAt,
+    ),
+    description: record.narrative.trim().isEmpty
+        ? 'No narrative provided.'
+        : record.narrative.trim(),
+    responderName: 'Responder to be assigned',
     responderPhone: '',
-    updates: const [
-      StatusUpdate(
-        title: 'New',
-        date: 'May 15 · 6:32 AM',
-        description: 'Report received.',
-      ),
-      StatusUpdate(
-        title: 'Acknowledged',
-        date: 'May 15 · 7:00 AM',
-        description: 'DPWH notified and cleared for dispatch.',
-      ),
-      StatusUpdate(
-        title: 'In Progress',
-        date: 'May 15 · 9:15 AM',
-        description: 'Clearing crew on site with chainsaw equipment.',
-      ),
-      StatusUpdate(
-        title: 'Resolved',
-        date: 'May 15 · 11:30 AM',
-        description: 'Tree fully removed. Road clear in both directions.',
-      ),
-      StatusUpdate(
-        title: 'Closed',
-        date: 'May 15 · 2:00 PM',
-        description: 'Case officially closed.',
-      ),
-    ],
-  ),
-];
+    updates: record.statusUpdates
+        .map(
+          (u) => StatusUpdate(
+            title: u.title,
+            date: u.date,
+            description: u.description,
+          ),
+        )
+        .toList(),
+  );
+}
+
+class _CategoryVisual {
+  final IconData icon;
+  final Color bg;
+  final Color color;
+  const _CategoryVisual(this.icon, this.bg, this.color);
+}
+
+_CategoryVisual _categoryVisual(String category) {
+  switch (category.toLowerCase()) {
+    case 'fire & emergency':
+    case 'fire':
+    case 'emergency':
+      return const _CategoryVisual(
+        Icons.local_fire_department,
+        AppColors.iconCircleFire,
+        AppColors.hotlineRed,
+      );
+    case 'public safety':
+    case 'public safety & peace and order':
+      return const _CategoryVisual(
+        Icons.record_voice_over_outlined,
+        AppColors.iconCircleFire,
+        AppColors.hotlineRed,
+      );
+    case 'crime & property':
+    case 'crime':
+      return const _CategoryVisual(
+        Icons.lock_outline,
+        AppColors.iconCircleDoc,
+        AppColors.primary,
+      );
+    case 'domestic & family':
+      return const _CategoryVisual(
+        Icons.home_outlined,
+        AppColors.infoBg,
+        AppColors.primary,
+      );
+    case 'community disputes':
+      return const _CategoryVisual(
+        Icons.group_outlined,
+        AppColors.iconCircleNoise,
+        AppColors.statusResolvedText,
+      );
+    case 'violence & gender-related':
+      return const _CategoryVisual(
+        Icons.shield_outlined,
+        AppColors.iconCircleFire,
+        AppColors.hotlineRed,
+      );
+    case 'traffic & road':
+      return const _CategoryVisual(
+        Icons.directions_car_outlined,
+        AppColors.iconCircleRoad,
+        AppColors.ratingStar,
+      );
+    case 'environmental & sanitation':
+    case 'environmental':
+      return const _CategoryVisual(
+        Icons.eco_outlined,
+        AppColors.iconCircleDoc,
+        AppColors.primary,
+      );
+    case 'animal-related':
+      return const _CategoryVisual(
+        Icons.pets_outlined,
+        AppColors.iconCircleDoc,
+        AppColors.primary,
+      );
+    case 'missing / welfare':
+      return const _CategoryVisual(
+        Icons.help_outline,
+        AppColors.infoBg,
+        AppColors.primary,
+      );
+    case 'barangay / administrative':
+      return const _CategoryVisual(
+        Icons.apartment_outlined,
+        AppColors.statusClosedBg,
+        AppColors.textGray,
+      );
+    default:
+      return const _CategoryVisual(
+        Icons.help_outline,
+        AppColors.statusClosedBg,
+        AppColors.textGray,
+      );
+  }
+}
+
+ReportStatus _statusFrom(String status) {
+  switch (status.trim().toLowerCase()) {
+    case 'resolved':
+      return ReportStatus.resolved;
+    case 'closed':
+      return ReportStatus.closed;
+    default: // pending, under_review, assigned, …
+      return ReportStatus.inProgress;
+  }
+}
+
+String _displayDateTime(String value) {
+  final t = DateTime.tryParse(value);
+  if (t == null) {
+    return value.trim().isEmpty ? '' : value;
+  }
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+  final ampm = t.hour < 12 ? 'AM' : 'PM';
+  return '${months[t.month - 1]} ${t.day}, ${t.year} · '
+      '$h:${t.minute.toString().padLeft(2, '0')} $ampm';
+}
+
+String _coordsText(ReportRecord r) {
+  if (r.latitude == null || r.longitude == null) {
+    return 'No location provided';
+  }
+  return '${r.latitude!.toStringAsFixed(5)}, '
+      '${r.longitude!.toStringAsFixed(5)}';
+}
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -191,10 +243,14 @@ class _ReportsScreenState extends State<ReportsScreen>
   late final TabController _tabController;
   int _navIndex = 1;
 
+  List<ReportItem>? _reports;
+  bool _loading = true;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _loadReports();
   }
 
   @override
@@ -203,10 +259,28 @@ class _ReportsScreenState extends State<ReportsScreen>
     super.dispose();
   }
 
-  List<ReportItem> get _all => _sampleReports;
+  Future<void> _loadReports() async {
+    if (mounted) setState(() => _loading = true);
+    List<ReportItem>? items;
+    try {
+      final auth = await AuthStore.load();
+      final email = auth.account?.email ?? '';
+      final records = await ReportService.fetchMyReports(email);
+      items = records.map(_reportFromRecord).toList();
+    } catch (_) {
+      items = _reports; // keep the previous list on failure
+    }
+    if (!mounted) return;
+    setState(() {
+      _reports = items;
+      _loading = false;
+    });
+  }
+
+  List<ReportItem> get _all => _reports ?? const [];
   List<ReportItem> get _active =>
-      _sampleReports.where((r) => r.status == ReportStatus.inProgress).toList();
-  List<ReportItem> get _resolved => _sampleReports
+      _all.where((r) => r.status == ReportStatus.inProgress).toList();
+  List<ReportItem> get _resolved => _all
       .where(
         (r) =>
             r.status == ReportStatus.resolved ||
@@ -316,9 +390,21 @@ class _ReportsScreenState extends State<ReportsScreen>
               child: TabBarView(
                 controller: _tabController,
                 children: [
-                  _ReportList(reports: _all),
-                  _ReportList(reports: _active),
-                  _ReportList(reports: _resolved),
+                  _ReportList(
+                    reports: _all,
+                    loading: _loading,
+                    onRefresh: _loadReports,
+                  ),
+                  _ReportList(
+                    reports: _active,
+                    loading: _loading,
+                    onRefresh: _loadReports,
+                  ),
+                  _ReportList(
+                    reports: _resolved,
+                    loading: _loading,
+                    onRefresh: _loadReports,
+                  ),
                 ],
               ),
             ),
@@ -331,19 +417,73 @@ class _ReportsScreenState extends State<ReportsScreen>
 
 class _ReportList extends StatelessWidget {
   final List<ReportItem> reports;
-  const _ReportList({required this.reports});
+  final bool loading;
+  final Future<void> Function() onRefresh;
+  const _ReportList({
+    required this.reports,
+    required this.loading,
+    required this.onRefresh,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-      children: [
-        for (final report in reports) ...[
-          _ReportCard(report: report),
-          const SizedBox(height: 12),
+    if (loading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(40),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    if (reports.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(20, 40, 20, 20),
+          children: [
+            const Icon(
+              Icons.inbox_outlined,
+              size: 44,
+              color: AppColors.textGray,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'No reports yet',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textDark,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Reports you submit will appear here.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: AppColors.textGray),
+            ),
+            const SizedBox(height: 24),
+            const _ReportIncidentButton(),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+        children: [
+          for (final report in reports) ...[
+            _ReportCard(report: report),
+            const SizedBox(height: 12),
+          ],
+          const _ReportIncidentButton(),
         ],
-        const _ReportIncidentButton(),
-      ],
+      ),
     );
   }
 }

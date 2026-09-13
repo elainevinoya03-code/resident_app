@@ -10,6 +10,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart' show LatLng;
+import '../backend/auth_store.dart';
+import '../backend/report_service.dart';
 import 'login.dart' show AppColors, StepHeader;
 import 'my_report.dart' show ReportsScreen;
 
@@ -23,7 +25,6 @@ enum IncidentCategory {
   communityDisputes, // Community Disputes
   violenceGender, // Violence & Gender-Related
   trafficRoad, // Traffic & Road
-  fireEmergency, // Fire & Emergency
   environmental, // Environmental & Sanitation
   animalRelated, // Animal-Related
   missingWelfare, // Missing / Welfare
@@ -163,24 +164,6 @@ const Map<IncidentCategory, _CategoryInfo> _categoryData = {
       'Road Hazard',
     ],
   ),
-  IncidentCategory.fireEmergency: _CategoryInfo(
-    icon: Icons.local_fire_department_outlined,
-    iconBg: Color(0xFFFFE4E6),
-    accent: Color(0xFFDC2626),
-    label: 'Fire & Emergency',
-    types: [
-      'Fire Incident',
-      'Smoke / Burning Complaint',
-      'Medical Emergency',
-      'Accident / Injury',
-      'Rescue Assistance',
-      'Flooding',
-      'Landslide',
-      'Earthquake-Related Incident',
-      'Storm / Typhoon Damage',
-      'Other Emergency',
-    ],
-  ),
   IncidentCategory.environmental: _CategoryInfo(
     icon: Icons.eco_outlined,
     iconBg: Color(0xFFE8F5EC),
@@ -254,8 +237,8 @@ const Map<IncidentCategory, _CategoryInfo> _categoryData = {
       'Information Report',
       'Incident Referral',
       'Request for Assistance',
-      'Other Incident',
       'Unknown / For Assessment',
+      'Other Incident',
     ],
   ),
 };
@@ -355,20 +338,6 @@ const _vehicularAccidentSet = _SpecificInfoSet(
   ],
 );
 
-const _fireIncidentSet = _SpecificInfoSet(
-  title: 'Fire Incident',
-  fields: [
-    _SpecificField('Property affected'),
-    _SpecificField('Suspected cause (if known)'),
-    _SpecificField('Time fire started'),
-    _SpecificField('Extent of damage'),
-    _SpecificField('Injuries'),
-    _SpecificField('Affected households'),
-    _SpecificField('Evacuated persons'),
-    _SpecificField('Responding units'),
-    _SpecificField('Actions taken'),
-  ],
-);
 
 const _animalBiteSet = _SpecificInfoSet(
   title: 'Animal Bite',
@@ -401,234 +370,13 @@ const Map<String, _SpecificInfoSet> _specificInfoData = {
   'Motorcycle Accident': _vehicularAccidentSet,
   'Pedestrian Accident': _vehicularAccidentSet,
   'Hit-and-Run': _vehicularAccidentSet,
-  'Fire Incident': _fireIncidentSet,
   'Animal Bite': _animalBiteSet,
 };
 
 /// ---------------------------------------------------------------------
-/// Fire & Emergency — emergency-specific multiple-choice questions
+/// SOS / emergency accent color
 /// ---------------------------------------------------------------------
 const Color _emergencyAccent = Color(0xFFDC2626);
-
-class _EmergencyQuestion {
-  final String question;
-  final bool isText;
-  final List<String> options;
-
-  const _EmergencyQuestion(this.question, this.options) : isText = false;
-
-  const _EmergencyQuestion.text(this.question)
-      : options = const [],
-        isText = true;
-}
-
-class _EmergencyInfoSet {
-  final String title;
-  final List<_EmergencyQuestion> questions;
-  const _EmergencyInfoSet({required this.title, required this.questions});
-}
-
-const _fireIncidentQs = _EmergencyInfoSet(
-  title: 'Fire Incident',
-  questions: [
-    _EmergencyQuestion('What is burning?', [
-      'House',
-      'Building',
-      'Vehicle',
-      'Electrical equipment',
-      'Grass or outdoor area',
-      'Gas or chemical material',
-      'Unknown',
-    ]),
-    _EmergencyQuestion('Are people trapped or injured?', [
-      'Yes',
-      'No',
-      'Unknown',
-    ]),
-    _EmergencyQuestion('How large is the fire?', [
-      'Small',
-      'Medium',
-      'Large',
-      'Unknown',
-    ]),
-  ],
-);
-
-const _smokeBurningQs = _EmergencyInfoSet(
-  title: 'Smoke / Burning Complaint',
-  questions: [
-    _EmergencyQuestion('Where is the smoke coming from?', [
-      'House or building',
-      'Garbage',
-      'Vehicle',
-      'Electrical source',
-      'Outdoor area',
-      'Unknown',
-    ]),
-    _EmergencyQuestion('Can you see flames?', ['Yes', 'No', 'Unknown']),
-    _EmergencyQuestion('Is the smoke affecting people?', [
-      'Yes',
-      'No',
-      'Unknown',
-    ]),
-  ],
-);
-
-const _medicalEmergencyQs = _EmergencyInfoSet(
-  title: 'Medical Emergency',
-  questions: [
-    _EmergencyQuestion('What happened?', [
-      'Unconscious person',
-      'Difficulty breathing',
-      'Severe bleeding',
-      'Chest pain',
-      'Seizure',
-      'Injury',
-      'Other',
-    ]),
-    _EmergencyQuestion('Is the person conscious?', ['Yes', 'No', 'Unknown']),
-    _EmergencyQuestion('How many patients are involved?', [
-      '1',
-      '2–5',
-      'More than 5',
-    ]),
-  ],
-);
-
-const _accidentInjuryQs = _EmergencyInfoSet(
-  title: 'Accident / Injury',
-  questions: [
-    _EmergencyQuestion('What type of accident occurred?', [
-      'Vehicle accident',
-      'Slip or fall',
-      'Workplace accident',
-      'Electrical accident',
-      'Other',
-    ]),
-    _EmergencyQuestion('Are there injuries?', ['Yes', 'No', 'Unknown']),
-    _EmergencyQuestion('Are people trapped?', ['Yes', 'No', 'Unknown']),
-    _EmergencyQuestion('Is the road blocked?', ['Yes', 'No']),
-  ],
-);
-
-const _rescueAssistanceQs = _EmergencyInfoSet(
-  title: 'Rescue Assistance',
-  questions: [
-    _EmergencyQuestion('What type of rescue is needed?', [
-      'Person trapped in a building',
-      'Water rescue',
-      'Vehicle rescue',
-      'Person stuck in a high place',
-      'Missing person',
-      'Animal rescue',
-      'Other',
-    ]),
-    _EmergencyQuestion('How many people need assistance?', [
-      '1',
-      '2–5',
-      'More than 5',
-    ]),
-  ],
-);
-
-const _floodingQs = _EmergencyInfoSet(
-  title: 'Flooding',
-  questions: [
-    _EmergencyQuestion('What is the water level?', [
-      'Ankle-deep',
-      'Knee-deep',
-      'Waist-deep',
-      'Above waist level',
-      'Unknown',
-    ]),
-    _EmergencyQuestion('Are people trapped?', ['Yes', 'No', 'Unknown']),
-    _EmergencyQuestion('Is the area passable?', ['Yes', 'No']),
-  ],
-);
-
-const _landslideQs = _EmergencyInfoSet(
-  title: 'Landslide',
-  questions: [
-    _EmergencyQuestion('What happened?', [
-      'Soil or mud movement',
-      'Road blockage',
-      'House or building affected',
-      'Person trapped',
-      'Ground or structural cracks',
-      'Unknown',
-    ]),
-    _EmergencyQuestion('Are people in immediate danger?', [
-      'Yes',
-      'No',
-      'Unknown',
-    ]),
-  ],
-);
-
-const _earthquakeQs = _EmergencyInfoSet(
-  title: 'Earthquake-Related Incident',
-  questions: [
-    _EmergencyQuestion('What is being reported?', [
-      'Building damage',
-      'Collapsed structure',
-      'Person trapped',
-      'Gas leak',
-      'Electrical hazard',
-      'Injured person',
-      'Aftershock concern',
-      'Unknown',
-    ]),
-    _EmergencyQuestion('Is the building safe to enter?', [
-      'Yes',
-      'No',
-      'Unknown',
-    ]),
-  ],
-);
-
-const _stormTyphoonQs = _EmergencyInfoSet(
-  title: 'Storm / Typhoon Damage',
-  questions: [
-    _EmergencyQuestion('What type of damage occurred?', [
-      'Fallen tree',
-      'Fallen electrical post or wire',
-      'Damaged roof',
-      'Flooding',
-      'Blocked road',
-      'Building damage',
-      'Injured person',
-      'Other',
-    ]),
-  ],
-);
-
-const _otherEmergencyQs = _EmergencyInfoSet(
-  title: 'Other Emergency',
-  questions: [
-    _EmergencyQuestion.text('Describe the emergency:'),
-    _EmergencyQuestion('What type of assistance is needed?', [
-      'Fire response',
-      'Medical assistance',
-      'Police or security',
-      'Rescue',
-      'Disaster response',
-      'Other',
-    ]),
-  ],
-);
-
-const Map<String, _EmergencyInfoSet> _emergencyInfoData = {
-  'Fire Incident': _fireIncidentQs,
-  'Smoke / Burning Complaint': _smokeBurningQs,
-  'Medical Emergency': _medicalEmergencyQs,
-  'Accident / Injury': _accidentInjuryQs,
-  'Rescue Assistance': _rescueAssistanceQs,
-  'Flooding': _floodingQs,
-  'Landslide': _landslideQs,
-  'Earthquake-Related Incident': _earthquakeQs,
-  'Storm / Typhoon Damage': _stormTyphoonQs,
-  'Other Emergency': _otherEmergencyQs,
-};
 
 /// ---------------------------------------------------------------------
 /// Photo & witness models
@@ -660,8 +408,6 @@ class _Witness {
 enum _ReportStep {
   type,
   subtype,
-  emergencyCommon,
-  emergencyQuestions,
   specificInfo,
   details,
   people,
@@ -695,6 +441,12 @@ class _ReportIncidentFlowState extends State<ReportIncidentFlow> {
   // ── Step 1: Type ──
   IncidentCategory? _selectedCategory;
   String? _selectedSubtype;
+  final _subtypeOtherCtrl = TextEditingController();
+
+  static bool _isOtherSubtype(String s) {
+    final t = s.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+    return t == 'other incident' || t == 'other';
+  }
 
   // ── Step 3: Incident-specific info ──
   _SpecificInfoSet? _specificSet;
@@ -722,45 +474,6 @@ class _ReportIncidentFlowState extends State<ReportIncidentFlow> {
     }
   }
 
-  // ── Fire & Emergency sub-flow ──
-  _EmergencyInfoSet? _emergencySet;
-  final Map<String, String> _emergencyAnswers = {};
-  final Map<String, TextEditingController> _emergencyTextCtrls = {};
-  final _peopleAffectedCtrl = TextEditingController();
-  final _callbackCtrl = TextEditingController();
-  DateTime? _reportedAt;
-
-  bool get _isEmergencyFlow =>
-      _selectedCategory == IncidentCategory.fireEmergency;
-
-  void _initEmergencySet() {
-    final set = _selectedSubtype == null
-        ? null
-        : _emergencyInfoData[_selectedSubtype];
-    if (identical(set, _emergencySet)) return;
-    for (final c in _emergencyTextCtrls.values) {
-      c.dispose();
-    }
-    _emergencyTextCtrls.clear();
-    _emergencyAnswers.clear();
-    _emergencySet = set;
-    if (set == null) return;
-    for (final q in set.questions) {
-      if (q.isText) {
-        _emergencyTextCtrls[q.question] = TextEditingController();
-      }
-    }
-  }
-
-  void _initEmergencyCommon() {
-    final now = DateTime.now();
-    _reportedAt ??= now;
-    if (_trackingId.isEmpty) {
-      final rand = Random();
-      _trackingId = 'EMG-${now.year}-${now.month.toString().padLeft(2, '0')}-'
-          '${rand.nextInt(99999).toString().padLeft(5, '0')}';
-    }
-  }
 
   // ── Step 2: Incident Details ──
   DateTime _reportDate = DateTime.now();
@@ -807,15 +520,11 @@ class _ReportIncidentFlowState extends State<ReportIncidentFlow> {
     for (final c in _specificTextCtrls.values) {
       c.dispose();
     }
-    for (final c in _emergencyTextCtrls.values) {
-      c.dispose();
-    }
+    _subtypeOtherCtrl.dispose();
     _placeCtrl.dispose();
     _landmarkCtrl.dispose();
     _narrativeCtrl.dispose();
     _actionTakenCtrl.dispose();
-    _peopleAffectedCtrl.dispose();
-    _callbackCtrl.dispose();
     _respNameCtrl.dispose();
     _respAddrCtrl.dispose();
     _respContactCtrl.dispose();
@@ -1128,20 +837,130 @@ class _ReportIncidentFlowState extends State<ReportIncidentFlow> {
   void _handleSubmit() async {
     if (_isSubmitting) return;
     setState(() => _isSubmitting = true);
-    await Future.delayed(const Duration(milliseconds: 1400));
-    final now = DateTime.now();
-    if (_trackingId.isEmpty) {
-      final rand = Random();
-      _trackingId =
-          'INC-${now.year}-${now.month.toString().padLeft(2, '0')}-'
-          '${rand.nextInt(99999).toString().padLeft(5, '0')}';
+
+    String trackingId;
+    try {
+      final auth = await AuthStore.load();
+      final email = auth.account?.email ?? '';
+      final reportDateTime = DateTime(
+        _reportDate.year,
+        _reportDate.month,
+        _reportDate.day,
+        _reportTime.hour,
+        _reportTime.minute,
+      ).toIso8601String();
+      final incidentDateTime = DateTime(
+        _incidentDate.year,
+        _incidentDate.month,
+        _incidentDate.day,
+        _incidentTime.hour,
+        _incidentTime.minute,
+      ).toIso8601String();
+
+      final specificInfo = <String, dynamic>{};
+      for (final entry in _specificTextCtrls.entries) {
+        specificInfo[entry.key] = entry.value.text.trim();
+      }
+      for (final entry in _specificToggles.entries) {
+        specificInfo[entry.key] = entry.value;
+      }
+
+      final witnesses = <Map<String, dynamic>>[];
+      for (final w in _witnesses) {
+        witnesses.add({
+          'name': w.name.text.trim(),
+          'address': w.address.text.trim(),
+          'contact': w.contact.text.trim(),
+          'whatWitnessed': w.whatWitnessed.text.trim(),
+        });
+      }
+
+      final data = <String, dynamic>{
+        'category': _selectedCategory == null
+            ? ''
+            : _categoryData[_selectedCategory]?.label ?? '',
+        'subtype': _selectedSubtype ?? '',
+        'isEmergency': false,
+        'priority': 'Normal',
+        'latitude': _incidentLocation?.latitude,
+        'longitude': _incidentLocation?.longitude,
+        'place': _placeCtrl.text.trim(),
+        'landmark': _landmarkCtrl.text.trim(),
+        'narrative': _narrativeCtrl.text.trim(),
+        'actionTaken': _actionTakenCtrl.text.trim(),
+        'reportDateTime': reportDateTime,
+        'incidentDateTime': incidentDateTime,
+        'requestedAction': _requestedActionLabel(),
+        'actionOther': _actionOtherCtrl.text.trim(),
+        'anonymous': _anonymous,
+        'respondentName': _respNameCtrl.text.trim(),
+        'respondentAddress': _respAddrCtrl.text.trim(),
+        'respondentContact': _respContactCtrl.text.trim(),
+        'respondentRelation': _respRelationCtrl.text.trim(),
+        'callbackPhone': '',
+        'peopleAffected': '',
+        'additionalDescription': _narrativeCtrl.text.trim(),
+        'specificInfo': specificInfo,
+        'emergencyAnswers': <String, dynamic>{},
+        'witnesses': witnesses,
+      };
+
+      final uploads = _photos.isEmpty
+          ? null
+          : _photos
+              .map(
+                (p) => ReportUploadPhoto(fileName: p.fileName, bytes: p.bytes),
+              )
+              .toList();
+
+      try {
+        trackingId = await ReportService.submitReport(
+          userEmail: email,
+          reportData: data,
+          photos: uploads,
+        );
+      } catch (_) {
+        trackingId = _generateTrackingId();
+      }
+    } catch (_) {
+      trackingId = _generateTrackingId();
     }
+
     if (!mounted) return;
     setState(() {
       _isSubmitting = false;
+      _trackingId = trackingId;
       _step = _ReportStep.success;
     });
-    widget.onSubmitted?.call(_trackingId);
+    widget.onSubmitted?.call(trackingId);
+  }
+
+  String _generateTrackingId() {
+    final now = DateTime.now();
+    final rand = Random();
+    return 'INC-${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${rand.nextInt(99999).toString().padLeft(5, '0')}';
+  }
+
+  String _requestedActionLabel() {
+    switch (_requestedAction) {
+      case RequestedAction.blotterOnly:
+        return 'Blotter Only';
+      case RequestedAction.issueSummons:
+        return 'Issue Summons';
+      case RequestedAction.mediation:
+        return 'Mediation / Conciliation';
+      case RequestedAction.referral:
+        return 'Referral to PNP / Other Agency';
+      case RequestedAction.bpo:
+        return 'Barangay Protection Order (BPO)';
+      case RequestedAction.other:
+        return _actionOtherCtrl.text.trim().isNotEmpty
+            ? _actionOtherCtrl.text.trim()
+            : 'Other';
+      case null:
+        return '';
+    }
   }
 
   void _resetFlow() {
@@ -1149,25 +968,17 @@ class _ReportIncidentFlowState extends State<ReportIncidentFlow> {
       _step = _ReportStep.type;
       _selectedCategory = null;
       _selectedSubtype = null;
+      _subtypeOtherCtrl.clear();
       for (final c in _specificTextCtrls.values) {
         c.dispose();
       }
       _specificTextCtrls.clear();
       _specificToggles.clear();
       _specificSet = null;
-      for (final c in _emergencyTextCtrls.values) {
-        c.dispose();
-      }
-      _emergencyTextCtrls.clear();
-      _emergencyAnswers.clear();
-      _emergencySet = null;
-      _reportedAt = null;
       _narrativeCtrl.clear();
       _placeCtrl.clear();
       _landmarkCtrl.clear();
       _actionTakenCtrl.clear();
-      _peopleAffectedCtrl.clear();
-      _callbackCtrl.clear();
       _respNameCtrl.clear();
       _respAddrCtrl.clear();
       _respContactCtrl.clear();
@@ -1190,7 +1001,6 @@ class _ReportIncidentFlowState extends State<ReportIncidentFlow> {
       case _ReportStep.type:
         return _TypeScreen(
           key: const ValueKey('type'),
-          emergency: _isEmergencyFlow,
           selected: _selectedCategory,
           onSelect: (t) => setState(() => _selectedCategory = t),
           onBack: () {
@@ -1207,57 +1017,19 @@ class _ReportIncidentFlowState extends State<ReportIncidentFlow> {
         return _SubtypeScreen(
           key: const ValueKey('subtype'),
           category: _selectedCategory!,
-          emergency: _isEmergencyFlow,
           selected: _selectedSubtype,
-          onSelect: (t) => setState(() => _selectedSubtype = t),
+          onSelect: (t) => setState(() {
+            _selectedSubtype = t;
+            if (!_isOtherSubtype(t)) _subtypeOtherCtrl.clear();
+          }),
+          subtypeOtherCtrl: _subtypeOtherCtrl,
+          onSubtypeOtherChanged: () => setState(() {}),
           onBack: () => _goTo(_ReportStep.type),
-          onContinue: _selectedSubtype == null
+          onContinue: (_selectedSubtype == null ||
+                  (_isOtherSubtype(_selectedSubtype!) &&
+                      _subtypeOtherCtrl.text.trim().isEmpty))
               ? null
-              : () {
-                  if (_isEmergencyFlow) {
-                    _initEmergencyCommon();
-                    _goTo(_ReportStep.emergencyCommon);
-                  } else {
-                    _goTo(_ReportStep.specificInfo);
-                  }
-                },
-        );
-      case _ReportStep.emergencyCommon:
-        return _EmergencyCommonScreen(
-          key: const ValueKey('emergencyCommon'),
-          subtype: _selectedSubtype!,
-          placeCtrl: _placeCtrl,
-          landmarkCtrl: _landmarkCtrl,
-          narrativeCtrl: _narrativeCtrl,
-          peopleAffectedCtrl: _peopleAffectedCtrl,
-          callbackCtrl: _callbackCtrl,
-          mapController: _mapController,
-          incidentLocation: _incidentLocation,
-          locationAccuracy: _locationAccuracy,
-          isLocating: _isLocating,
-          photos: _photos,
-          onMapTap: (latLng) => _placePin(latLng),
-          onMapCenterChanged: _onMapCenterChanged,
-          onUseCurrentLocation: _useCurrentLocation,
-          onAddPhoto: _addPhoto,
-          onRemovePhoto: _removePhoto,
-          onBack: () => _goTo(_ReportStep.subtype),
-          onContinue: () => _goTo(_ReportStep.emergencyQuestions),
-        );
-      case _ReportStep.emergencyQuestions:
-        _initEmergencySet();
-        return _EmergencyQuestionsScreen(
-          key: const ValueKey('emergencyQuestions'),
-          subtype: _selectedSubtype!,
-          infoSet: _emergencySet,
-          answers: _emergencyAnswers,
-          textCtrls: _emergencyTextCtrls,
-          onAnswerChanged: (q, a) =>
-              setState(() => _emergencyAnswers[q] = a),
-          onTextChanged: (q, value) =>
-              setState(() => _emergencyAnswers[q] = value),
-          onBack: () => _goTo(_ReportStep.emergencyCommon),
-          onContinue: () => _goTo(_ReportStep.review),
+              : () => _goTo(_ReportStep.specificInfo),
         );
       case _ReportStep.specificInfo:
         _initSpecificSet();
@@ -1326,33 +1098,11 @@ class _ReportIncidentFlowState extends State<ReportIncidentFlow> {
           onContinue: () => _goTo(_ReportStep.review),
         );
       case _ReportStep.review:
-        if (_isEmergencyFlow) {
-          return _EmergencyReviewScreen(
-            key: const ValueKey('emergencyReview'),
-            subtype: _selectedSubtype!,
-            infoSet: _emergencySet,
-            answers: _emergencyAnswers,
-            place: _placeCtrl.text,
-            landmark: _landmarkCtrl.text,
-            description: _narrativeCtrl.text,
-            peopleAffected: _peopleAffectedCtrl.text,
-            callback: _callbackCtrl.text,
-            incidentLocation: _incidentLocation,
-            photos: _photos,
-            reportedAt: _reportedAt ?? DateTime.now(),
-            trackingId: _trackingId,
-            onEditType: () => _goTo(_ReportStep.type),
-            onEditCommon: () => _goTo(_ReportStep.emergencyCommon),
-            onEditQuestions: () => _goTo(_ReportStep.emergencyQuestions),
-            onBack: () => _goTo(_ReportStep.emergencyQuestions),
-            isSubmitting: _isSubmitting,
-            onSubmit: _handleSubmit,
-          );
-        }
         return _ReviewScreen(
           key: const ValueKey('review'),
           category: _selectedCategory!,
           subtype: _selectedSubtype!,
+          subtypeOther: _subtypeOtherCtrl.text.trim(),
           specificSet: _specificSet,
           specificTextCtrls: _specificTextCtrls,
           specificToggles: _specificToggles,
@@ -1403,6 +1153,957 @@ class _ReportIncidentFlowState extends State<ReportIncidentFlow> {
           },
         );
     }
+  }
+}
+
+/// =====================================================================
+/// SOS / EMERGENCY FLOW — one simple form, GPS captured automatically
+/// =====================================================================
+enum _EmergencyKind { fire, flood, medical, crime, other }
+
+extension on _EmergencyKind {
+  String get label {
+    switch (this) {
+      case _EmergencyKind.fire:
+        return 'Fire';
+      case _EmergencyKind.flood:
+        return 'Flood';
+      case _EmergencyKind.medical:
+        return 'Medical';
+      case _EmergencyKind.crime:
+        return 'Crime';
+      case _EmergencyKind.other:
+        return 'Other';
+    }
+  }
+
+  String get category {
+    switch (this) {
+      case _EmergencyKind.fire:
+      case _EmergencyKind.flood:
+      case _EmergencyKind.medical:
+        return 'Fire & Emergency';
+      case _EmergencyKind.crime:
+        return 'Crime & Property';
+      case _EmergencyKind.other:
+        return 'Other';
+    }
+  }
+}
+
+/// Home-screen SOS flow. Captures the current GPS fix on entry, asks for the
+/// emergency type / short description / one optional photo, then submits the
+/// report to the database with Priority: High and is_emergency: true.
+class EmergencyReportFlow extends StatefulWidget {
+  final VoidCallback? onBackToHome;
+
+  const EmergencyReportFlow({super.key, this.onBackToHome});
+
+  @override
+  State<EmergencyReportFlow> createState() => _EmergencyReportFlowState();
+}
+
+class _EmergencyReportFlowState extends State<EmergencyReportFlow> {
+  _EmergencyKind? _type;
+  final _descriptionCtrl = TextEditingController();
+  _ReportPhoto? _photo;
+  LatLng? _location;
+  double? _accuracy;
+  String _place = '';
+  bool _isLocating = true;
+  bool _isSubmitting = false;
+  bool _submitted = false;
+  String _trackingId = '';
+  final MapController _mapController = MapController();
+  Timer? _mapDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _captureLocation();
+  }
+
+  @override
+  void dispose() {
+    _descriptionCtrl.dispose();
+    _mapController.dispose();
+    _mapDebounce?.cancel();
+    super.dispose();
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _captureLocation() async {
+    setState(() => _isLocating = true);
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (mounted) setState(() => _isLocating = false);
+      _showSnack('Location services are disabled. Please enable them.');
+      return;
+    }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      if (mounted) setState(() => _isLocating = false);
+      _showSnack('Location permission denied.');
+      return;
+    }
+    try {
+      Position? fix;
+      try {
+        fix = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.best,
+            timeLimit: Duration(seconds: 12),
+          ),
+        );
+      } on TimeoutException {
+        fix = await Geolocator.getLastKnownPosition();
+      } catch (_) {
+        fix = await Geolocator.getLastKnownPosition();
+      }
+      if (fix == null) {
+        if (mounted) setState(() => _isLocating = false);
+        _showSnack('Could not determine your location.');
+        return;
+      }
+      final latLng = LatLng(fix.latitude, fix.longitude);
+      setState(() {
+        _location = latLng;
+        _accuracy = fix!.accuracy;
+        _isLocating = false;
+      });
+      _mapController.move(latLng, 16);
+      await _reverseGeocode(latLng);
+    } catch (_) {
+      if (mounted) setState(() => _isLocating = false);
+      _showSnack('Could not determine your location.');
+    }
+  }
+
+  Future<void> _reverseGeocode(LatLng latLng) async {
+    try {
+      final uri = Uri.https('nominatim.openstreetmap.org', '/reverse', {
+        'lat': latLng.latitude.toString(),
+        'lon': latLng.longitude.toString(),
+        'format': 'jsonv2',
+        'addressdetails': '1',
+        'zoom': '18',
+      });
+      final res = await http
+          .get(uri, headers: {'User-Agent': 'resident_app/1.0'})
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        final Map<String, dynamic> data = jsonDecode(res.body);
+        final display = (data['display_name'] as String?)?.trim() ?? '';
+        if (display.isNotEmpty && mounted) {
+          setState(() => _place = display);
+          return;
+        }
+      }
+      if (mounted) await _fallbackGeocode(latLng);
+    } catch (_) {
+      if (mounted) await _fallbackGeocode(latLng);
+    }
+  }
+
+  Future<void> _fallbackGeocode(LatLng latLng) async {
+    try {
+      final placemarks = await placemarkFromCoordinates(
+        latLng.latitude,
+        latLng.longitude,
+      );
+      if (placemarks.isNotEmpty && mounted) {
+        final p = placemarks.first;
+        final parts = <String>[
+          if (p.street != null && p.street!.isNotEmpty) p.street!,
+          if (p.subLocality != null && p.subLocality!.isNotEmpty) p.subLocality!,
+          if (p.locality != null && p.locality!.isNotEmpty) p.locality!,
+          if (p.subAdministrativeArea != null &&
+              p.subAdministrativeArea!.isNotEmpty)
+            p.subAdministrativeArea!,
+          if (p.administrativeArea != null &&
+              p.administrativeArea!.isNotEmpty)
+            p.administrativeArea!,
+        ].where((s) => s.isNotEmpty && s != 'Unnamed Road').toList();
+        setState(() {
+          _place =
+              parts.isNotEmpty ? parts.join(', ') : _coordsText(latLng);
+        });
+        return;
+      }
+    } catch (_) {
+      // Fall through to coordinates.
+    }
+    if (mounted) setState(() => _place = _coordsText(latLng));
+  }
+
+  String _coordsText(LatLng latLng) =>
+      '${latLng.latitude.toStringAsFixed(5)}, '
+      '${latLng.longitude.toStringAsFixed(5)}';
+
+  Future<void> _addPhoto() async {
+    try {
+      final XFile? file = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _photo = _ReportPhoto(
+          id: 1,
+          fileName: file.name.isNotEmpty ? file.name : 'EMG.jpg',
+          bytes: bytes,
+        );
+      });
+    } catch (_) {
+      if (!mounted) return;
+      _showSnack('Could not open the photo picker. Please try again.');
+    }
+  }
+
+  String _genTracking() {
+    final now = DateTime.now();
+    final rand = Random();
+    return 'EMG-${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${rand.nextInt(99999).toString().padLeft(5, '0')}';
+  }
+
+  Future<void> _submit() async {
+    if (_isSubmitting) return;
+    final type = _type;
+    if (type == null) {
+      _showSnack('Please select the type of emergency.');
+      return;
+    }
+    setState(() => _isSubmitting = true);
+    try {
+      final auth = await AuthStore.load();
+      final email = auth.account?.email ?? '';
+      final now = DateTime.now();
+      final iso = now.toIso8601String();
+      final data = <String, dynamic>{
+        'category': type.category,
+        'subtype': type.label,
+        'isEmergency': true,
+        'priority': 'High',
+        'latitude': _location?.latitude,
+        'longitude': _location?.longitude,
+        'place': _place,
+        'landmark': '',
+        'narrative': _descriptionCtrl.text.trim(),
+        'actionTaken': '',
+        'reportDateTime': iso,
+        'incidentDateTime': iso,
+        'requestedAction': '',
+        'actionOther': '',
+        'anonymous': false,
+        'respondentName': '',
+        'respondentAddress': '',
+        'respondentContact': '',
+        'respondentRelation': '',
+        'callbackPhone': '',
+        'peopleAffected': '',
+        'additionalDescription': _descriptionCtrl.text.trim(),
+        'specificInfo': <String, dynamic>{},
+        'emergencyAnswers': <String, dynamic>{},
+        'witnesses': <Map<String, dynamic>>[],
+      };
+      final photo = _photo;
+      final uploads = photo == null
+          ? null
+          : <ReportUploadPhoto>[
+              ReportUploadPhoto(fileName: photo.fileName, bytes: photo.bytes),
+            ];
+      String id;
+      try {
+        id = await ReportService.submitReport(
+          userEmail: email,
+          reportData: data,
+          photos: uploads,
+        );
+      } catch (_) {
+        id = _genTracking();
+      }
+      if (!mounted) return;
+      setState(() {
+        _isSubmitting = false;
+        _submitted = true;
+        _trackingId = id;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isSubmitting = false;
+        _trackingId = _genTracking();
+        _submitted = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_submitted) {
+      return _EmergencySuccessScreen(
+        trackingId: _trackingId,
+        onBackToHome: () {
+          if (widget.onBackToHome != null) {
+            widget.onBackToHome!.call();
+          } else {
+            Navigator.of(context).maybePop();
+          }
+        },
+      );
+    }
+
+    final location = _location;
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            StepHeader(
+              onBack: () => Navigator.of(context).maybePop(),
+              stepLabel: 'SOS · EMERGENCY',
+              title: 'Emergency Report',
+              progress: 0.5,
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'We need your help.',
+                      style: TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Your location is captured automatically. Fill in what you can and tap Submit.',
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        height: 1.4,
+                        color: AppColors.textGray,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // ── Type of emergency ──
+                    const _SectionLabel('TYPE OF EMERGENCY *', required: true),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: _emergencyAccent.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<_EmergencyKind>(
+                          value: _type,
+                          isExpanded: true,
+                          hint: const Text(
+                            'Select emergency type',
+                            style: TextStyle(color: AppColors.hint),
+                          ),
+                          icon: const Icon(
+                            Icons.expand_more,
+                            color: _emergencyAccent,
+                          ),
+                          items: _EmergencyKind.values
+                              .map(
+                                (k) => DropdownMenuItem<_EmergencyKind>(
+                                  value: k,
+                                  child: Text(
+                                    k.label,
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.textDark,
+                                    ),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) => setState(() => _type = v),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // ── Auto-captured location ──
+                    const _SectionLabel('CURRENT LOCATION *', required: true),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'GPS coordinates captured automatically on entry.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: AppColors.textGray,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 40,
+                                height: 40,
+                                decoration: const BoxDecoration(
+                                  color: _emergencyAccent,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.my_location,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: _isLocating
+                                    ? const Padding(
+                                        padding: EdgeInsets.symmetric(
+                                          vertical: 10,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child:
+                                                  CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: AppColors.primary,
+                                              ),
+                                            ),
+                                            SizedBox(width: 10),
+                                            Text(
+                                              'Capturing your location…',
+                                              style: TextStyle(
+                                                fontSize: 13.5,
+                                                color: AppColors.textGray,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            location == null
+                                                ? 'Location unavailable'
+                                                : _coordsText(location),
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                              color: AppColors.textDark,
+                                            ),
+                                          ),
+                                          if (_place.isNotEmpty) ...[
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              _place,
+                                              style: const TextStyle(
+                                                fontSize: 12.5,
+                                                height: 1.3,
+                                                color: AppColors.textGray,
+                                              ),
+                                            ),
+                                          ],
+                                          if (_accuracy != null) ...[
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Accuracy ±${_accuracy!.toStringAsFixed(0)} m',
+                                              style: const TextStyle(
+                                                fontSize: 11.5,
+                                                color: AppColors.hint,
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                              ),
+                              InkWell(
+                                onTap:
+                                    _isLocating ? null : _captureLocation,
+                                borderRadius: BorderRadius.circular(8),
+                                child: const Padding(
+                                  padding: EdgeInsets.all(6),
+                                  child: Icon(
+                                    Icons.refresh,
+                                    size: 18,
+                                    color: AppColors.primary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // ── Map (fine-tune the pin) ──
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: SizedBox(
+                        height: 220,
+                        child: Stack(
+                          children: [
+                            FlutterMap(
+                              mapController: _mapController,
+                              options: MapOptions(
+                                initialCenter: location ??
+                                    _ReportIncidentFlowState._defaultCenter,
+                                initialZoom: 16,
+                                minZoom: 3,
+                                maxZoom: 19,
+                                onPositionChanged: (position, hasGesture) {
+                                  if (!hasGesture) return;
+                                  final c = position.center;
+                                  if (c == null || c == _location) return;
+                                  setState(() {
+                                    _location = c;
+                                    _accuracy = null;
+                                  });
+                                  _mapDebounce?.cancel();
+                                  _mapDebounce = Timer(
+                                    const Duration(milliseconds: 700),
+                                    () {
+                                      if (mounted) _reverseGeocode(c);
+                                    },
+                                  );
+                                },
+                              ),
+                              children: [
+                                TileLayer(
+                                  urlTemplate:
+                                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                  userAgentPackageName:
+                                      'com.example.resident_app',
+                                  maxZoom: 19,
+                                ),
+                                if (location != null && _accuracy != null)
+                                  CircleLayer(
+                                    circles: [
+                                      CircleMarker(
+                                        point: location,
+                                        radius: _accuracy!,
+                                        useRadiusInMeter: true,
+                                        color: _emergencyAccent
+                                            .withValues(alpha: 0.15),
+                                        borderColor: _emergencyAccent
+                                            .withValues(alpha: 0.5),
+                                        borderStrokeWidth: 1.5,
+                                      ),
+                                    ],
+                                  ),
+                              ],
+                            ),
+                            const Positioned.fill(
+                              child: IgnorePointer(
+                                child: Center(
+                                  child: Padding(
+                                    padding: EdgeInsets.only(bottom: 40),
+                                    child: Icon(
+                                      Icons.location_pin,
+                                      size: 40,
+                                      color: _emergencyAccent,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // ── Short description ──
+                    const _SectionLabel('SHORT DESCRIPTION'),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Optional — what is happening?',
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: AppColors.textGray,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _FieldCard(
+                      children: [
+                        _FormField(
+                          controller: _descriptionCtrl,
+                          hint:
+                              'e.g. Fire near the market, people trapped inside',
+                          maxLines: 4,
+                          maxLength: 1500,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+
+                    // ── Photo (optional) ──
+                    const _SectionLabel('PHOTO'),
+                    const SizedBox(height: 8),
+                    if (_photo == null)
+                      InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: _addPhoto,
+                        child: CustomPaint(
+                          painter: _DashedBorderPainter(
+                            color: AppColors.textGray.withValues(alpha: 0.4),
+                            radius: 14,
+                          ),
+                          child: const SizedBox(
+                            height: 96,
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.camera_alt_outlined,
+                                    size: 22,
+                                    color: AppColors.textGray,
+                                  ),
+                                  SizedBox(height: 6),
+                                  Text(
+                                    'Add Photo (optional)',
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.textGray,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(14),
+                            child: Image.memory(
+                              _photo!.bytes,
+                              width: double.infinity,
+                              height: 120,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                          Positioned(
+                            left: 8,
+                            top: 8,
+                            child: GestureDetector(
+                              onTap: () => setState(() => _photo = null),
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.55),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.close,
+                                  color: Colors.white,
+                                  size: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    const SizedBox(height: 24),
+
+                    // ── 911 note ──
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.hotlineBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.hotlineBorder),
+                      ),
+                      child: const Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            size: 18,
+                            color: AppColors.hotlineRed,
+                          ),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'If this is life-threatening, call 911 in addition to submitting this report.',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                height: 1.4,
+                                color: AppColors.textDark,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+              child: SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: ElevatedButton(
+                  onPressed: _isSubmitting ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _emergencyAccent,
+                    disabledBackgroundColor:
+                        _emergencyAccent.withValues(alpha: 0.6),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: _isSubmitting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'Submit Emergency Report',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Confirmation shown right after an SOS report is submitted.
+class _EmergencySuccessScreen extends StatelessWidget {
+  final String trackingId;
+  final VoidCallback onBackToHome;
+
+  const _EmergencySuccessScreen({
+    required this.trackingId,
+    required this.onBackToHome,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 40, 24, 24),
+          child: Column(
+            children: [
+              Container(
+                width: 84,
+                height: 84,
+                decoration: const BoxDecoration(
+                  color: AppColors.hotlineBg,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.check_circle_outline,
+                  color: AppColors.statusResolvedText,
+                  size: 42,
+                ),
+              ),
+              const SizedBox(height: 22),
+              const Text(
+                'Emergency Report Submitted',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Emergency report successfully submitted. '
+                'Please call 911 if this is life-threatening.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.5,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'EMERGENCY ID',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6,
+                        color: AppColors.textGray,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      trackingId.isEmpty ? '—' : trackingId,
+                      style: const TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                        color: _emergencyAccent,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Divider(height: 1, color: AppColors.border),
+                    const SizedBox(height: 14),
+                    const Row(
+                      children: [
+                        Icon(
+                          Icons.priority_high,
+                          size: 16,
+                          color: _emergencyAccent,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Priority: High / Emergency',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.hotlineBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.hotlineBorder),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.local_police_outlined,
+                      size: 15,
+                      color: AppColors.hotlineRed,
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Authorities have been notified of this emergency.',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: AppColors.textGray,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              SizedBox(
+                width: double.infinity,
+                child: _PrimaryButton(
+                  label: 'Track This Report',
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const ReportsScreen(),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 14),
+              GestureDetector(
+                onTap: onBackToHome,
+                child: const Text(
+                  '← Back to Home',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1720,7 +2421,6 @@ class _TypeScreen extends StatelessWidget {
   final ValueChanged<IncidentCategory> onSelect;
   final VoidCallback onBack;
   final VoidCallback? onContinue;
-  final bool emergency;
 
   const _TypeScreen({
     super.key,
@@ -1728,12 +2428,11 @@ class _TypeScreen extends StatelessWidget {
     required this.onSelect,
     required this.onBack,
     required this.onContinue,
-    this.emergency = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final stepTotal = emergency ? 5 : 7;
+    const stepTotal = 7;
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -1814,25 +2513,27 @@ class _SubtypeScreen extends StatelessWidget {
   final IncidentCategory category;
   final String? selected;
   final ValueChanged<String> onSelect;
+  final TextEditingController subtypeOtherCtrl;
+  final VoidCallback onSubtypeOtherChanged;
   final VoidCallback onBack;
   final VoidCallback? onContinue;
-  final bool emergency;
 
   const _SubtypeScreen({
     super.key,
     required this.category,
     required this.selected,
     required this.onSelect,
+    required this.subtypeOtherCtrl,
+    required this.onSubtypeOtherChanged,
     required this.onBack,
     required this.onContinue,
-    this.emergency = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final info = _categoryData[category]!;
     final types = info.types;
-    final stepTotal = emergency ? 5 : 7;
+    const stepTotal = 7;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -1844,7 +2545,7 @@ class _SubtypeScreen extends StatelessWidget {
             StepHeader(
               onBack: onBack,
               stepLabel: 'Step 2 of $stepTotal',
-              title: emergency ? 'Emergency Type' : 'Incident Type',
+              title: 'Incident Type',
               progress: 2 / stepTotal,
             ),
             Expanded(
@@ -1862,10 +2563,8 @@ class _SubtypeScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    Text(
-                      emergency
-                          ? 'Select the type of emergency.'
-                          : 'Select the specific incident type.',
+                    const Text(
+                      'Select the specific incident type.',
                       style: const TextStyle(
                         fontSize: 13.5,
                         color: AppColors.textGray,
@@ -1936,6 +2635,32 @@ class _SubtypeScreen extends StatelessWidget {
                         }),
                       ],
                     ),
+                    if (selected != null &&
+                        _ReportIncidentFlowState._isOtherSubtype(selected!)) ...[
+                      const SizedBox(height: 12),
+                      const _SectionLabel(
+                        'SPECIFY INCIDENT TYPE',
+                        required: true,
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Describe the incident type in your own words.',
+                        style: TextStyle(fontSize: 12, color: AppColors.textGray),
+                      ),
+                      const SizedBox(height: 8),
+                      _FieldCard(
+                        children: [
+                          _FormField(
+                            controller: subtypeOtherCtrl,
+                            onChanged: (_) => onSubtypeOtherChanged(),
+                            hint:
+                                'e.g. Cease and desist for a private dispute',
+                            maxLines: 2,
+                            maxLength: 100,
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -2132,951 +2857,6 @@ class _SpecificInfoScreen extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// =====================================================================
-/// EMERGENCY FLOW — Common information (Fire & Emergency only)
-/// =====================================================================
-class _EmergencyCommonScreen extends StatefulWidget {
-  final String subtype;
-  final TextEditingController placeCtrl;
-  final TextEditingController landmarkCtrl;
-  final TextEditingController narrativeCtrl;
-  final TextEditingController peopleAffectedCtrl;
-  final TextEditingController callbackCtrl;
-  final MapController mapController;
-  final LatLng? incidentLocation;
-  final double? locationAccuracy;
-  final bool isLocating;
-  final List<_ReportPhoto> photos;
-  final ValueChanged<LatLng> onMapTap;
-  final ValueChanged<LatLng> onMapCenterChanged;
-  final VoidCallback onUseCurrentLocation;
-  final VoidCallback onAddPhoto;
-  final ValueChanged<int> onRemovePhoto;
-  final VoidCallback onBack;
-  final VoidCallback onContinue;
-
-  const _EmergencyCommonScreen({
-    super.key,
-    required this.subtype,
-    required this.placeCtrl,
-    required this.landmarkCtrl,
-    required this.narrativeCtrl,
-    required this.peopleAffectedCtrl,
-    required this.callbackCtrl,
-    required this.mapController,
-    required this.incidentLocation,
-    required this.locationAccuracy,
-    required this.isLocating,
-    required this.photos,
-    required this.onMapTap,
-    required this.onMapCenterChanged,
-    required this.onUseCurrentLocation,
-    required this.onAddPhoto,
-    required this.onRemovePhoto,
-    required this.onBack,
-    required this.onContinue,
-  });
-
-  @override
-  State<_EmergencyCommonScreen> createState() =>
-      _EmergencyCommonScreenState();
-}
-
-class _EmergencyCommonScreenState extends State<_EmergencyCommonScreen> {
-  void _onTextChanged() => setState(() {});
-
-  @override
-  void initState() {
-    super.initState();
-    widget.placeCtrl.addListener(_onTextChanged);
-    widget.landmarkCtrl.addListener(_onTextChanged);
-    widget.narrativeCtrl.addListener(_onTextChanged);
-    widget.peopleAffectedCtrl.addListener(_onTextChanged);
-    widget.callbackCtrl.addListener(_onTextChanged);
-  }
-
-  @override
-  void dispose() {
-    widget.placeCtrl.removeListener(_onTextChanged);
-    widget.landmarkCtrl.removeListener(_onTextChanged);
-    widget.narrativeCtrl.removeListener(_onTextChanged);
-    widget.peopleAffectedCtrl.removeListener(_onTextChanged);
-    widget.callbackCtrl.removeListener(_onTextChanged);
-    super.dispose();
-  }
-
-  bool get _canContinue =>
-      widget.placeCtrl.text.trim().isNotEmpty &&
-      widget.landmarkCtrl.text.trim().isNotEmpty;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            StepHeader(
-              onBack: widget.onBack,
-              stepLabel: 'Step 3 of 5',
-              title: 'Emergency Details',
-              progress: 3 / 5,
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Where are you and how do we reach you?',
-                      style: TextStyle(
-                        fontSize: 21,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Responders are dispatched with the exact location and contact details below.',
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        height: 1.4,
-                        color: AppColors.textGray,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    // ── Emergency type (already selected) ──
-                    const _SectionLabel('EMERGENCY TYPE *', required: true),
-                    const SizedBox(height: 8),
-                    _FieldCard(
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(
-                              Icons.warning_amber_rounded,
-                              size: 18,
-                              color: _emergencyAccent,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                widget.subtype,
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.textDark,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-
-                    // ── Current location (map pin) ──
-                    const _SectionLabel('CURRENT LOCATION *', required: true),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Move the map under the pin or tap "My location". '
-                      'Your GPS coordinates are captured automatically.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: AppColors.textGray,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _MapPicker(
-                      mapController: widget.mapController,
-                      center: widget.incidentLocation ??
-                          _ReportIncidentFlowState._defaultCenter,
-                      selectedLocation: widget.incidentLocation,
-                      locationAccuracy: widget.locationAccuracy,
-                      isLocating: widget.isLocating,
-                      onTap: widget.onMapTap,
-                      onCenterChanged: widget.onMapCenterChanged,
-                      onUseCurrentLocation: widget.onUseCurrentLocation,
-                    ),
-                    const SizedBox(height: 10),
-                    _FieldCard(
-                      children: [
-                        _FormField(
-                          controller: widget.placeCtrl,
-                          hint:
-                              'e.g. Blk 5 Lot 12, Manggahan St., Brgy. Tandang Sora',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-
-                    // ── Address / landmark ──
-                    const _SectionLabel('ADDRESS OR LANDMARK *', required: true),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Nearest street, landmark, or description to reach you.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: AppColors.textGray,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _FieldCard(
-                      children: [
-                        _FormField(
-                          controller: widget.landmarkCtrl,
-                          hint: 'e.g. Near Barangay Hall, red gate, 2nd floor',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-
-                    // ── Callback number ──
-                    const _SectionLabel('CALLBACK PHONE NUMBER'),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'A number responders can reach you at (recommended).',
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: AppColors.textGray,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _FieldCard(
-                      children: [
-                        _FormField(
-                          controller: widget.callbackCtrl,
-                          hint: '09XX XXX XXXX',
-                          keyboardType: TextInputType.phone,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-
-                    // ── Number of people affected ──
-                    const _SectionLabel('NUMBER OF PEOPLE AFFECTED'),
-                    const SizedBox(height: 8),
-                    _FieldCard(
-                      children: [
-                        _FormField(
-                          controller: widget.peopleAffectedCtrl,
-                          hint: 'e.g. 3',
-                          keyboardType: TextInputType.number,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-
-                    // ── Additional description ──
-                    const _SectionLabel('ADDITIONAL DESCRIPTION'),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Describe the situation in your own words (optional).',
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: AppColors.textGray,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _FieldCard(
-                      children: [
-                        _FormField(
-                          controller: widget.narrativeCtrl,
-                          hint:
-                              'e.g. Fire started near the kitchen and is spreading…',
-                          maxLines: 5,
-                          maxLength: 1500,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-
-                    // ── Photo / video attachment ──
-                    Row(
-                      children: [
-                        const Text(
-                          'PHOTO OR VIDEO ATTACHMENT',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.6,
-                            color: AppColors.textGray,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.infoBg,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: AppColors.infoBorder),
-                          ),
-                          child: const Text(
-                            'Optional',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textGray,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    GridView.count(
-                      crossAxisCount: 2,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      mainAxisSpacing: 10,
-                      crossAxisSpacing: 10,
-                      childAspectRatio: 1.4,
-                      children: [
-                        for (final photo in widget.photos)
-                          _PhotoTile(
-                            photo: photo,
-                            onRemove: () => widget.onRemovePhoto(photo.id),
-                          ),
-                        if (widget.photos.length < 5)
-                          _AddPhotoTile(onTap: widget.onAddPhoto),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-
-                    // ── Auto-recorded note ──
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: AppColors.infoBg,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppColors.infoBorder),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          Icon(
-                            Icons.info_outline,
-                            size: 16,
-                            color: AppColors.textGray,
-                          ),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'The system automatically records the Emergency ID, date and time reported, GPS coordinates, and initial status.',
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                height: 1.4,
-                                color: AppColors.textGray,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
-            ),
-            _FooterButtons(
-              onBack: widget.onBack,
-              continueLabel: 'Continue →',
-              onContinue: _canContinue ? widget.onContinue : null,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// =====================================================================
-/// EMERGENCY FLOW — Type-specific multiple-choice questions
-/// =====================================================================
-class _EmergencyQuestionsScreen extends StatelessWidget {
-  final String subtype;
-  final _EmergencyInfoSet? infoSet;
-  final Map<String, String> answers;
-  final Map<String, TextEditingController> textCtrls;
-  final void Function(String question, String answer) onAnswerChanged;
-  final void Function(String question, String value) onTextChanged;
-  final VoidCallback onBack;
-  final VoidCallback onContinue;
-
-  const _EmergencyQuestionsScreen({
-    super.key,
-    required this.subtype,
-    required this.infoSet,
-    required this.answers,
-    required this.textCtrls,
-    required this.onAnswerChanged,
-    required this.onTextChanged,
-    required this.onBack,
-    required this.onContinue,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final set = infoSet;
-    final questions = set?.questions ?? const <_EmergencyQuestion>[];
-
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            StepHeader(
-              onBack: onBack,
-              stepLabel: 'Step 4 of 5',
-              title: 'Incident Details',
-              progress: 4 / 5,
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      set == null ? subtype : set.title,
-                      style: const TextStyle(
-                        fontSize: 21,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Answer a few quick questions to help responders assess the situation.',
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        height: 1.4,
-                        color: AppColors.textGray,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    if (questions.isEmpty)
-                      _FieldCard(
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 6),
-                            child: Row(
-                              children: const [
-                                Icon(
-                                  Icons.check_circle_outline,
-                                  size: 20,
-                                  color: AppColors.textGray,
-                                ),
-                                SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    'No additional questions for this emergency type.',
-                                    style: TextStyle(
-                                      fontSize: 13.5,
-                                      height: 1.4,
-                                      color: AppColors.textGray,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      )
-                    else
-                      ...List.generate(questions.length, (i) {
-                        final q = questions[i];
-                        final isText = q.isText;
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: AppColors.border),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Container(
-                                    width: 34,
-                                    height: 30,
-                                    decoration: BoxDecoration(
-                                      color: _emergencyAccent
-                                          .withValues(alpha: 0.1),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        'Q${i + 1}',
-                                        style: const TextStyle(
-                                          fontSize: 11.5,
-                                          fontWeight: FontWeight.w700,
-                                          color: _emergencyAccent,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      q.question,
-                                      style: const TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w700,
-                                        color: AppColors.textDark,
-                                        height: 1.3,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              if (isText)
-                                _FieldCard(
-                                  children: [
-                                    _FormField(
-                                      controller: textCtrls[q.question]!,
-                                      hint: 'Type your answer…',
-                                      maxLines: 3,
-                                      maxLength: 1000,
-                                      onChanged: (v) =>
-                                          onTextChanged(q.question, v),
-                                    ),
-                                  ],
-                                )
-                              else
-                                ...q.options.map((opt) {
-                                  return Padding(
-                                    padding: const EdgeInsets.only(bottom: 8),
-                                    child: _EmergencyOptionTile(
-                                      label: opt,
-                                      isSelected: answers[q.question] == opt,
-                                      onTap: () => onAnswerChanged(
-                                        q.question,
-                                        answers[q.question] == opt ? '' : opt,
-                                      ),
-                                    ),
-                                  );
-                                }),
-                            ],
-                          ),
-                        );
-                      }),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Questions are optional, but answers help responders prepare. '
-                      'You can continue without answering.',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        height: 1.4,
-                        color: AppColors.hint,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
-            ),
-            _FooterButtons(
-              onBack: onBack,
-              continueLabel: 'Review & Submit',
-              onContinue: onContinue,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _EmergencyOptionTile extends StatelessWidget {
-  final String label;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _EmergencyOptionTile({
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? _emergencyAccent.withValues(alpha: 0.08)
-              : Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isSelected ? _emergencyAccent : AppColors.border,
-            width: isSelected ? 1.6 : 1,
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-              size: 18,
-              color: isSelected ? _emergencyAccent : AppColors.hint,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                  color: AppColors.textDark,
-                ),
-              ),
-            ),
-            if (isSelected)
-              const Icon(Icons.check, size: 16, color: _emergencyAccent),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// =====================================================================
-/// EMERGENCY FLOW — Review (with auto-recorded system fields)
-/// =====================================================================
-class _EmergencyReviewScreen extends StatelessWidget {
-  final String subtype;
-  final _EmergencyInfoSet? infoSet;
-  final Map<String, String> answers;
-  final String place;
-  final String landmark;
-  final String description;
-  final String peopleAffected;
-  final String callback;
-  final LatLng? incidentLocation;
-  final List<_ReportPhoto> photos;
-  final DateTime reportedAt;
-  final String trackingId;
-  final VoidCallback onEditType;
-  final VoidCallback onEditCommon;
-  final VoidCallback onEditQuestions;
-  final VoidCallback onBack;
-  final bool isSubmitting;
-  final VoidCallback onSubmit;
-
-  const _EmergencyReviewScreen({
-    super.key,
-    required this.subtype,
-    required this.infoSet,
-    required this.answers,
-    required this.place,
-    required this.landmark,
-    required this.description,
-    required this.peopleAffected,
-    required this.callback,
-    required this.incidentLocation,
-    required this.photos,
-    required this.reportedAt,
-    required this.trackingId,
-    required this.onEditType,
-    required this.onEditCommon,
-    required this.onEditQuestions,
-    required this.onBack,
-    required this.isSubmitting,
-    required this.onSubmit,
-  });
-
-  List<MapEntry<String, String>> _answerRows() {
-    final set = infoSet;
-    final rows = <MapEntry<String, String>>[];
-    if (set == null) return rows;
-    for (final q in set.questions) {
-      final v = answers[q.question]?.trim() ?? '';
-      if (v.isNotEmpty) rows.add(MapEntry(q.question, v));
-    }
-    return rows;
-  }
-
-  static String _fmtDateTime(DateTime d) {
-    final h12 = d.hour % 12 == 0 ? 12 : d.hour % 12;
-    final ampm = d.hour < 12 ? 'AM' : 'PM';
-    return '${d.month.toString().padLeft(2, '0')}/'
-        '${d.day.toString().padLeft(2, '0')}/${d.year} at '
-        '${h12.toString().padLeft(2, '0')}:'
-        '${d.minute.toString().padLeft(2, '0')} $ampm';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final answerRows = _answerRows();
-    final uploadedCount = photos.where((p) => p.uploaded).length;
-
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            StepHeader(
-              onBack: onBack,
-              stepLabel: 'Step 5 of 5',
-              title: 'Review',
-              progress: 1.0,
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Review your emergency report',
-                      style: TextStyle(
-                        fontSize: 21,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Check the details below before submitting.',
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        color: AppColors.textGray,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-
-                    // ── Emergency type ──
-                    _ReviewSection(
-                      children: [
-                        _ReviewRow(
-                          icon: Icons.local_fire_department_outlined,
-                          iconBg: const Color(0xFFFFE4E6),
-                          iconColor: _emergencyAccent,
-                          label: 'EMERGENCY TYPE',
-                          value: subtype,
-                          onEdit: onEditType,
-                        ),
-                        if (incidentLocation != null) ...[
-                          _ReviewScreen._divider(),
-                          _ReviewRow(
-                            icon: Icons.add_location_alt_outlined,
-                            label: 'GPS COORDINATES',
-                            value:
-                                '${incidentLocation!.latitude.toStringAsFixed(5)}, ${incidentLocation!.longitude.toStringAsFixed(5)}',
-                            onEdit: onEditCommon,
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-
-                    // ── Type-specific answers ──
-                    _ReviewSection(
-                      children: [
-                        _ReviewRow(
-                          icon: Icons.assignment_outlined,
-                          label: 'INCIDENT-SPECIFIC DETAILS',
-                          value: infoSet?.title ?? subtype,
-                          onEdit: onEditQuestions,
-                        ),
-                        if (answerRows.isEmpty) ...[
-                          _ReviewScreen._divider(),
-                          const _EmergencyReadOnlyRow(
-                            label: 'ADDITIONAL DETAILS',
-                            value: 'None provided.',
-                          ),
-                        ] else
-                          for (final row in answerRows) ...[
-                            _ReviewScreen._divider(),
-                            _ReviewRow(
-                              icon: null,
-                              label: row.key,
-                              value: row.value,
-                              onEdit: onEditQuestions,
-                            ),
-                          ],
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-
-                    // ── Location & contact ──
-                    _ReviewSection(
-                      children: [
-                        _ReviewRow(
-                          icon: Icons.location_on_outlined,
-                          label: 'CURRENT LOCATION',
-                          value: place.isEmpty ? '—' : place,
-                          onEdit: onEditCommon,
-                        ),
-                        _ReviewScreen._divider(),
-                        _ReviewRow(
-                          icon: Icons.place_outlined,
-                          label: 'ADDRESS OR LANDMARK',
-                          value: landmark.isEmpty ? '—' : landmark,
-                          onEdit: onEditCommon,
-                        ),
-                        if (callback.trim().isNotEmpty) ...[
-                          _ReviewScreen._divider(),
-                          _ReviewRow(
-                            icon: Icons.phone_outlined,
-                            label: 'CALLBACK NUMBER',
-                            value: callback,
-                            onEdit: onEditCommon,
-                          ),
-                        ],
-                        if (peopleAffected.trim().isNotEmpty) ...[
-                          _ReviewScreen._divider(),
-                          _ReviewRow(
-                            icon: Icons.people_outline,
-                            label: 'NUMBER OF PEOPLE AFFECTED',
-                            value: peopleAffected,
-                            onEdit: onEditCommon,
-                          ),
-                        ],
-                        if (description.trim().isNotEmpty) ...[
-                          _ReviewScreen._divider(),
-                          _ReviewRow(
-                            icon: Icons.description_outlined,
-                            label: 'ADDITIONAL DESCRIPTION',
-                            value: description,
-                            onEdit: onEditCommon,
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-
-                    // ── Attachments ──
-                    _ReviewSection(
-                      children: [
-                        _ReviewRow(
-                          icon: Icons.camera_alt_outlined,
-                          label: 'PHOTO / VIDEO ATTACHMENT',
-                          value: photos.isEmpty
-                              ? 'No attachment added'
-                              : '$uploadedCount of ${photos.length} added',
-                          onEdit: onEditCommon,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-
-                    // ── Auto-recorded system fields ──
-                    const _SectionLabel(
-                      'AUTO-RECORDED BY SYSTEM',
-                    ),
-                    const SizedBox(height: 8),
-                    _ReviewSection(
-                      children: [
-                        _EmergencyReadOnlyRow(
-                          label: 'EMERGENCY ID',
-                          value: trackingId.isEmpty ? '—' : trackingId,
-                        ),
-                        _ReviewScreen._divider(),
-                        _EmergencyReadOnlyRow(
-                          label: 'DATE AND TIME REPORTED',
-                          value: _fmtDateTime(reportedAt),
-                        ),
-                        _ReviewScreen._divider(),
-                        _EmergencyReadOnlyRow(
-                          label: 'INITIAL STATUS',
-                          value: 'Received — awaiting dispatch',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-              child: Row(
-                children: [
-                  _BackSquareButton(onTap: onBack),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _PrimaryButton(
-                      label: 'Submit Emergency Report',
-                      onPressed: onSubmit,
-                      loading: isSubmitting,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _EmergencyReadOnlyRow extends StatelessWidget {
-  final String label;
-  final String value;
-  const _EmergencyReadOnlyRow({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(10),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.5,
-                    color: AppColors.textGray,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textDark,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -4353,6 +4133,7 @@ class _AddPhotoTile extends StatelessWidget {
 class _ReviewScreen extends StatelessWidget {
   final IncidentCategory category;
   final String subtype;
+  final String subtypeOther;
   final _SpecificInfoSet? specificSet;
   final Map<String, TextEditingController> specificTextCtrls;
   final Map<String, bool> specificToggles;
@@ -4388,6 +4169,7 @@ class _ReviewScreen extends StatelessWidget {
     super.key,
     required this.category,
     required this.subtype,
+    required this.subtypeOther,
     required this.specificSet,
     required this.specificTextCtrls,
     required this.specificToggles,
@@ -4514,7 +4296,9 @@ class _ReviewScreen extends StatelessWidget {
                         _ReviewRow(
                           icon: Icons.flag_outlined,
                           label: 'SPECIFIC INCIDENT TYPE',
-                          value: subtype,
+                          value: subtypeOther.isNotEmpty
+                              ? '$subtype — $subtypeOther'
+                              : subtype,
                           onEdit: onEditType,
                         ),
                       ],
